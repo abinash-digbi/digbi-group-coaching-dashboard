@@ -10,7 +10,6 @@ st.set_page_config(
     page_icon="💪",
     layout="wide",
 )
-
 # ── Credentials from Streamlit secrets ────────────────────────────────────────
 CLIENT_ID     = st.secrets["ZOOM_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["ZOOM_CLIENT_SECRET"]
@@ -316,7 +315,7 @@ def main():
         st.markdown("---")
         auth_url = get_auth_url()
         st.markdown(
-            f"""<a href="{auth_url}" target="_self">
+            f"""<a href="{auth_url}" target="_top">
             <button style="background-color:#2D8CFF;color:white;border:none;
             padding:12px 28px;font-size:16px;border-radius:6px;cursor:pointer;">
             🔗 Connect Zoom Account
