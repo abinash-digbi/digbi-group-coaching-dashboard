@@ -58,9 +58,9 @@ def get_headers() -> dict:
 
 # ── API calls ──────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_meetings(user_id: str, from_date: str, to_date: str) -> list:
-    """Fetch past meetings for a user within date range."""
-    meetings = []
+def fetch_webinars(user_id: str, from_date: str, to_date: str) -> list:
+    """Fetch past webinars for a user within date range."""
+    webinars = [
     next_page = None
     while True:
         params = {
@@ -72,22 +72,22 @@ def fetch_meetings(user_id: str, from_date: str, to_date: str) -> list:
         if next_page:
             params["next_page_token"] = next_page
         r = requests.get(
-            f"{ZOOM_API_BASE}/users/{user_id}/meetings",
+            f"{ZOOM_API_BASE}/users/{user_id}/webinars",
             headers=get_headers(),
             params=params,
         )
         if r.status_code != 200:
             break
         data = r.json()
-        meetings.extend(data.get("meetings", []))
+        webinars.extend(data.get("webinars", []))
         next_page = data.get("next_page_token")
         if not next_page:
             break
-    return meetings
+    return webinars
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_participants(meeting_id: str) -> list:
-    """Fetch participants for a past meeting."""
+def fetch_participants(webinar_id: str) -> list:
+    """Fetch attendees for a past webinar."""
     participants = []
     next_page = None
     while True:
@@ -95,7 +95,7 @@ def fetch_participants(meeting_id: str) -> list:
         if next_page:
             params["next_page_token"] = next_page
         r = requests.get(
-            f"{ZOOM_API_BASE}/past_meetings/{meeting_id}/participants",
+            f"{ZOOM_API_BASE}/past_webinars/{webinar_id}/participants",
             headers=get_headers(),
             params=params,
         )
@@ -159,7 +159,7 @@ def render_dashboard():
 
         # Keyword filter for group coaching sessions
         st.subheader("🔍 Filter Sessions")
-        keyword = st.text_input("Session name contains", value="Group Coaching")
+        keyword = st.text_input("Session name contains", value="")
 
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
@@ -172,39 +172,39 @@ def render_dashboard():
                 st.session_state.pop(k, None)
             st.rerun()
 
-    # ── Fetch meetings ─────────────────────────────────────────────────────────
+    # ── Fetch webinars ─────────────────────────────────────────────────────────
     from_str = date_from.strftime("%Y-%m-%d")
     to_str   = date_to.strftime("%Y-%m-%d")
 
-    with st.spinner("Loading meetings…"):
-        meetings = fetch_meetings(user_id, from_str, to_str)
+    with st.spinner("Loading webinars…"):
+        webinars = fetch_webinars(user_id, from_str, to_str)
 
     # Filter by keyword
     if keyword:
-        meetings = [m for m in meetings if keyword.lower() in m.get("topic", "").lower()]
+        webinars = [m for m in webinars if keyword.lower() in m.get("topic", "").lower()]
 
     # ── Header ─────────────────────────────────────────────────────────────────
     st.title("💪 Digbi Group Coaching Dashboard")
     st.caption(f"Showing sessions from **{from_str}** to **{to_str}**  |  Filter: *\"{keyword}\"*")
 
-    if not meetings:
+    if not webinars:
         st.warning(f"No sessions found matching '{keyword}' in the selected date range. Try adjusting the filter or date range.")
         return
 
-    # ── Fetch participants for each meeting ────────────────────────────────────
+    # ── Fetch participants for each webinar ────────────────────────────────────
     all_participants = []
     progress = st.progress(0, text="Loading participant data…")
-    for i, mtg in enumerate(meetings):
-        pcts = fetch_participants(mtg["id"])
+    for i, wb in enumerate(webinars):
+        pcts = fetch_participants(wb["id"])
         for p in pcts:
-            p["meeting_id"]    = mtg["id"]
-            p["meeting_topic"] = mtg.get("topic", "Unknown")
-            p["meeting_date"]  = mtg.get("start_time", "")[:10]
+            p["webinar_id"]    = wb["id"]
+            p["meeting_topic"] = wb.get("topic", "Unknown")
+            p["meeting_date"]  = wb.get("start_time", "")[:10]
         all_participants.extend(pcts)
-        progress.progress((i + 1) / len(meetings), text=f"Loading participant data… {i+1}/{len(meetings)}")
+        progress.progress((i + 1) / len(webinars), text=f"Loading participant data… {i+1}/{len(webinars)}")
     progress.empty()
 
-    df_mtg  = pd.DataFrame(meetings)
+    df_mtg  = pd.DataFrame(webinars)
     df_part = pd.DataFrame(all_participants) if all_participants else pd.DataFrame()
 
     # Parse dates
