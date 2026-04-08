@@ -60,7 +60,7 @@ def get_headers() -> dict:
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_webinars(user_id: str, from_date: str, to_date: str) -> list:
     """Fetch past webinars for a user within date range."""
-    webinars = [
+    webinars = []
     next_page = None
     while True:
         params = {
