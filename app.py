@@ -292,7 +292,7 @@ def render_dashboard():
         "Overview", "By Series", "By Month", "Participants", "Raw Data"
     ])
 
-   with tab_overview:
+    with tab_overview:
         st.subheader("Stats for 7 Recurring Webinars")
         
         # 1. Create a base dataframe that ALWAYS contains all 7 series
