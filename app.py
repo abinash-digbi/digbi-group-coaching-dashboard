@@ -27,23 +27,23 @@ CLIENT_SECRET = st.secrets["ZOOM_CLIENT_SECRET"]
 REDIRECT_URI  = st.secrets["ZOOM_REDIRECT_URI"]
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 
-# ── The 7 recurring Group Coaching series ────────────────────────────────────
+# ── The 7 recurring Group Coaching series (Using exact Zoom titles) ────────────
 COACHING_SERIES = [
-    "Orientation + Eat Smart [Employer]",
-    "Orientation + Eat Smart [Solera]",
-    "How to Read Gene & Gut Kit",
-    "How to Read Gut Kit",
-    "Living Well with GLP-1",
+    "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members",
+    "Digbi Health Orientation & How to Eat Smart - Join Our Group Coaching Session",
+    "Learn to Read and Apply Your Genetics Nutrition and Gut Monitoring Reports for Better Health",
+    "Follow Your Gut Instincts: Understanding Your Gut Microbiome Report",
+    "Introducing Digbi Health: An Exclusive Wellness Benefit with access to GLP-1s",
     "Fine Tuning (2-4.99% WL)",
     "Thriving with IBS",
 ]
 
 SERIES_COLORS = {
-    "Orientation + Eat Smart [Employer]": "#1f77b4",
-    "Orientation + Eat Smart [Solera]":   "#ff7f0e",
-    "How to Read Gene & Gut Kit":         "#2ca02c",
-    "How to Read Gut Kit":                "#d62728",
-    "Living Well with GLP-1":             "#9467bd",
+    "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members": "#1f77b4",
+    "Digbi Health Orientation & How to Eat Smart - Join Our Group Coaching Session":   "#ff7f0e",
+    "Learn to Read and Apply Your Genetics Nutrition and Gut Monitoring Reports for Better Health":         "#2ca02c",
+    "Follow Your Gut Instincts: Understanding Your Gut Microbiome Report":                "#d62728",
+    "Introducing Digbi Health: An Exclusive Wellness Benefit with access to GLP-1s":             "#9467bd",
     "Fine Tuning (2-4.99% WL)":           "#8c564b",
     "Thriving with IBS":                  "#e377c2",
     "Other":                              "#7f7f7f",
@@ -73,32 +73,40 @@ def map_to_series(topic: str) -> str:
         if any(keyword in t for keyword in excluded_keywords):
             return "Other" # Instantly categorize company-specific webinars as 'Other'
 
-    # 2. EXACT MATCHES (From your historical Zoom CSV reports)
+    # 2. EXACT MATCHES 
     raw_exact = st.secrets.get("EXACT_MATCHES", {})
     if isinstance(raw_exact, dict):
-        # Streamlit sometimes lowers keys in secrets; we'll force everything lower for safety
-        exact_matches = {str(k).strip().lower(): str(v) for k, v in raw_exact.items()}
+        exact_matches = {}
+        for k in raw_exact.keys():
+            k_lower = str(k).strip().lower()
+            # Find the properly capitalized version from COACHING_SERIES
+            proper_case = str(k)
+            for series_name in COACHING_SERIES:
+                if series_name.lower() == k_lower:
+                    proper_case = series_name
+                    break
+            exact_matches[k_lower] = proper_case
     else:
         exact_matches = {}
     
     if t in exact_matches:
         return exact_matches[t]
         
-    # 3. FUZZY LOGIC FALLBACK (Catch future webinars or manual name changes)
+    # 3. FUZZY LOGIC FALLBACK (Returns Exact Zoom Titles)
     if "solera" in t and ("orientation" in t or "eat smart" in t or "gut only" in t):
-        return "Orientation + Eat Smart [Solera]"
+        return "Digbi Health Orientation & How to Eat Smart - Join Our Group Coaching Session"
     if "gut only" in t and ("orientation" in t or "eat smart" in t):
-        return "Orientation + Eat Smart [Solera]"
+        return "Digbi Health Orientation & How to Eat Smart - Join Our Group Coaching Session"
     if ("orientation" in t or "eat smart" in t) and ("employer" in t or "full product" in t):
-        return "Orientation + Eat Smart [Employer]"
+        return "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members"
     if "orientation" in t and "eat smart" in t:
-        return "Orientation + Eat Smart [Employer]"
+        return "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members"
     if "gene" in t and "gut" in t:
-        return "How to Read Gene & Gut Kit"
+        return "Learn to Read and Apply Your Genetics Nutrition and Gut Monitoring Reports for Better Health"
     if "gut kit" in t or ("read" in t and "gut" in t):
-        return "How to Read Gut Kit"
+        return "Follow Your Gut Instincts: Understanding Your Gut Microbiome Report"
     if "glp" in t or "glp-1" in t or "semaglutide" in t or "ozempic" in t:
-        return "Living Well with GLP-1"
+        return "Introducing Digbi Health: An Exclusive Wellness Benefit with access to GLP-1s"
     if "fine" in t and ("tun" in t or "wl" in t or "4.99" in t or "weight loss" in t):
         return "Fine Tuning (2-4.99% WL)"
     if "ibs" in t or "irritable" in t:
