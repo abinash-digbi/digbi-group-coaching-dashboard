@@ -540,15 +540,25 @@ def render_dashboard():
 
     # ▐▐▐ TAB 5 — RAW DATA ▌▌▌
     with tab_raw:
-        st.subheader("Webinars")
-        if not df_wb_f.empty:
+        st.subheader("All Fetched Webinars (including Other)")
+        if not df_wb.empty:
+            # Show ALL webinars (unfiltered) so you can see exact topic strings and series mapping
+            display_cols = ["session_date", "month_label", "series", "topic", "id"]
             st.dataframe(
-                df_wb_f[
-                    ["session_date", "month_label", "series", "topic", "id", "webinar_link"]
-                ].sort_values("session_date", ascending=False),
+                df_wb[display_cols].sort_values("session_date", ascending=False),
                 use_container_width=True,
                 hide_index=True,
             )
+            # Topic → Series mapping summary (debug)
+            st.markdown("---")
+            st.subheader("Topic → Series Mapping Summary")
+            mapping_summary = (
+                df_wb.groupby(["topic", "series"])
+                .size()
+                .reset_index(name="count")
+                .sort_values("series")
+            )
+            st.dataframe(mapping_summary, use_container_width=True, hide_index=True)
 
 
 # ── Password gate ────────────────────────────────────────────────────────────
