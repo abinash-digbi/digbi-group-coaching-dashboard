@@ -246,28 +246,46 @@ def fetch_all_webinars(user_id: str, from_date: str, to_date: str) -> list:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_participants(webinar_uuid: str) -> list:
+def fetch_participants(target_uuid: str, target_id: str) -> list:
     participants = []
     
-    # Zoom requires double URL-encoding for UUIDs if they contain '/' or '//'
-    safe_uuid = webinar_uuid
-    if isinstance(safe_uuid, str) and (safe_uuid.startswith('/') or '//' in safe_uuid):
-        safe_uuid = urllib.parse.quote(urllib.parse.quote(safe_uuid, safe=''), safe='')
+    # helper for requesting
+    def _fetch(endpoint: str):
+        res = []
+        next_page = None
+        success = False
+        while True:
+            r = requests.get(
+                endpoint,
+                headers=get_headers(),
+                params={"page_size": 300, "next_page_token": next_page}
+            )
+            if r.status_code == 200:
+                success = True
+                data = r.json()
+                res.extend(data.get("participants", []))
+                next_page = data.get("next_page_token")
+                if not next_page: break
+            else:
+                break
+        return success, res
+
+    # 1. First attempt: Use UUID (Required for recurring/some past webinars)
+    safe_uuid = target_uuid
+    success = False
+    if safe_uuid:
+        if '/' in safe_uuid:
+            # Double URL formulation for Zoom slashes
+            safe_uuid = urllib.parse.quote(urllib.parse.quote(safe_uuid, safe=''), safe='')
         
-    next_page = None
-    while True:
-        r = requests.get(
-            f"{ZOOM_API_BASE}/past_webinars/{safe_uuid}/participants",
-            headers=get_headers(),
-            params={"page_size": 300, "next_page_token": next_page},
-        )
-        if r.status_code != 200:
-            break
-        data = r.json()
-        participants.extend(data.get("participants", []))
-        next_page = data.get("next_page_token")
-        if not next_page:
-            break
+        success, participants = _fetch(f"{ZOOM_API_BASE}/past_webinars/{safe_uuid}/participants")
+
+    # 2. Second attempt: Fallback to ID if UUID failed or returned strictly nothing (useful for one-offs)
+    if not success and target_id and target_id != target_uuid:
+        fallback_success, fallback_parts = _fetch(f"{ZOOM_API_BASE}/past_webinars/{target_id}/participants")
+        if fallback_success:
+            return fallback_parts
+
     return participants
 
 
@@ -322,9 +340,9 @@ def render_dashboard():
         wb["series"]        = series
 
         if is_past:
-            # Zoom API needs the unique occurrence UUID to fetch participants for recurring meetings
-            target_id = str(wb.get("uuid", wb.get("id")))
-            pcts = fetch_participants(target_id)
+            target_uuid = str(wb.get("uuid", ""))
+            target_id = str(wb.get("id", ""))
+            pcts = fetch_participants(target_uuid, target_id)
             time.sleep(0.1)
             for p in pcts:
                 p["webinar_id"]    = wb["id"]
