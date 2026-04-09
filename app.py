@@ -436,10 +436,12 @@ def render_dashboard():
 
             stats_df = pd.merge(base_df, wb_stats,   on="series", how="left").fillna(0)
             stats_df = pd.merge(stats_df, part_stats, on="series", how="left").fillna(0)
-            stats_df["Avg_Sessions_Per_Attendee"] = (
-                stats_df["Total_Attendees"] / stats_df["Unique_Members"]
-            ).fillna(0).round(2)
-            stats_df.loc[stats_df["Unique_Members"] == 0, "Avg_Sessions_Per_Attendee"] = 0.0
+            stats_df["Avg_Sessions_Per_Attendee"] = 0.0
+            mask = stats_df["Unique_Members"] > 0
+            if mask.any():
+                stats_df.loc[mask, "Avg_Sessions_Per_Attendee"] = (
+                    stats_df.loc[mask, "Total_Attendees"] / stats_df.loc[mask, "Unique_Members"]
+                ).round(2)
 
         stats_df["Sessions"]        = stats_df["Sessions"].astype(int)
         stats_df["Total_Attendees"] = stats_df["Total_Attendees"].astype(int)
