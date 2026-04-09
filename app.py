@@ -161,8 +161,12 @@ def render_dashboard():
 
     stats_df = pd.merge(base_df, wb_stats, on="series", how="left").fillna(0)
     stats_df = pd.merge(stats_df, part_stats, on="series", how="left").fillna(0)
-    stats_df["Avg Sessions / Attendee"] = (stats_df["Total_Attendees"] / stats_df["Unique_Members"]).fillna(0).round(2)
-    
+    # Calculate average only where Unique_Members is greater than 0 to avoid ZeroDivisionError
+    stats_df["Avg Sessions / Attendee"] = stats_df.apply(
+        lambda row: round(row["Total_Attendees"] / row["Unique_Members"], 2) 
+        if row["Unique_Members"] > 0 else 0, 
+        axis=1
+    )    
     st.dataframe(stats_df.sort_values("Total_Attendees", ascending=False), use_container_width=True, hide_index=True)
 
 # ── Main Entry ──
