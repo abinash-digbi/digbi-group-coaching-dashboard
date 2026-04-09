@@ -276,10 +276,15 @@ def render_dashboard():
 
     # ── Top-level KPI strip ───────────────────────────────────────────────────
     st.title("Digbi Health - Group Coaching Dashboard")
+    
+    # FIX 1: Filter out "Other" webinars so KPIs only reflect official coaching series
+    df_wb_core = df_wb_f[df_wb_f["series"] != "Other"]
+    df_part_core = df_part_f[df_part_f["series"] != "Other"]
+
     k1, k2, k3, k4 = st.columns(4)
-    total_sessions = len(df_wb_f)
-    total_attendees = len(df_part_f)
-    unique_members = df_part_f["user_email"].nunique() if not df_part_f.empty and "user_email" in df_part_f.columns else 0
+    total_sessions = len(df_wb_core)
+    total_attendees = len(df_part_core)
+    unique_members = df_part_core["user_email"].nunique() if not df_part_core.empty and "user_email" in df_part_core.columns else 0
     avg_sessions_per_member = round(total_attendees / unique_members, 2) if unique_members else 0
 
     k1.metric("Total Sessions", total_sessions)
@@ -295,41 +300,44 @@ def render_dashboard():
     with tab_overview:
         st.subheader("Stats for 7 Recurring Webinars")
         
-        # 1. Create a base dataframe that ALWAYS contains all 7 series
         base_df = pd.DataFrame({"series": COACHING_SERIES})
         
-        if df_wb_f.empty or df_part_f.empty: 
-            # If there is absolutely no data, just show all 7 with zeros
+        if df_wb_f.empty: 
             stats_df = base_df.copy()
             stats_df["Sessions"] = 0
             stats_df["Total_Attendees"] = 0
             stats_df["Unique_Members"] = 0
             stats_df["Avg_Sessions_Per_Attendee"] = 0.0
         else:
-            # 2. Group the participant data
-            part_stats = df_part_f.groupby("series").agg(
-                Sessions=("webinar_id", "nunique"),
-                Total_Attendees=("user_email", "count"),
-                Unique_Members=("user_email", "nunique")
-            ).reset_index()
+            # FIX 2: Count sessions from the WEBINAR data, not the attendee data
+            wb_stats = df_wb_f.groupby("series").size().reset_index(name="Sessions")
             
-            # 3. Merge the stats onto the base 7 series to ensure none go missing
-            stats_df = pd.merge(base_df, part_stats, on="series", how="left").fillna(0)
+            # Count attendees from the PARTICIPANT data
+            if not df_part_f.empty:
+                part_stats = df_part_f.groupby("series").agg(
+                    Total_Attendees=("user_email", "count"),
+                    Unique_Members=("user_email", "nunique")
+                ).reset_index()
+            else:
+                part_stats = pd.DataFrame(columns=["series", "Total_Attendees", "Unique_Members"])
             
-            # 4. Calculate average, handling division by zero
+            # Merge both stats onto the base 7 series to ensure none go missing
+            stats_df = pd.merge(base_df, wb_stats, on="series", how="left").fillna(0)
+            stats_df = pd.merge(stats_df, part_stats, on="series", how="left").fillna(0)
+            
+            # Calculate average
             stats_df["Avg_Sessions_Per_Attendee"] = (
                 stats_df["Total_Attendees"] / stats_df["Unique_Members"]
             ).fillna(0).round(2)
             
-            # Clean up infinity values if any zero division snuck through
+            # Clean up infinity values
             stats_df.loc[stats_df["Unique_Members"] == 0, "Avg_Sessions_Per_Attendee"] = 0.0
         
-        # Ensure numbers are integers (except for the average)
+        # Ensure numbers are integers
         stats_df["Sessions"] = stats_df["Sessions"].astype(int)
         stats_df["Total_Attendees"] = stats_df["Total_Attendees"].astype(int)
         stats_df["Unique_Members"] = stats_df["Unique_Members"].astype(int)
         
-        # Rename columns for a clean UI
         stats_df = stats_df.rename(columns={
             "series": "Coaching Series",
             "Total_Attendees": "Total Attendees",
@@ -337,7 +345,6 @@ def render_dashboard():
             "Avg_Sessions_Per_Attendee": "Avg Sessions / Attendee"
         })
         
-        # Display the table
         st.dataframe(
             stats_df.sort_values("Total Attendees", ascending=False), 
             use_container_width=True, 
