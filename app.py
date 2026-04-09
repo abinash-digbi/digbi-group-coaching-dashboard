@@ -292,36 +292,57 @@ def render_dashboard():
         "Overview", "By Series", "By Month", "Participants", "Raw Data"
     ])
 
-    with tab_overview:
+   with tab_overview:
+        st.subheader("Stats for 7 Recurring Webinars")
+        
+        # 1. Create a base dataframe that ALWAYS contains all 7 series
+        base_df = pd.DataFrame({"series": COACHING_SERIES})
+        
         if df_wb_f.empty or df_part_f.empty: 
-            st.info("No sessions or attendees match the current filters.")
+            # If there is absolutely no data, just show all 7 with zeros
+            stats_df = base_df.copy()
+            stats_df["Sessions"] = 0
+            stats_df["Total_Attendees"] = 0
+            stats_df["Unique_Members"] = 0
+            stats_df["Avg_Sessions_Per_Attendee"] = 0.0
         else:
-            st.subheader("Stats for 7 Recurring Webinars")
-            
-            stats_df = df_part_f.groupby("series").agg(
+            # 2. Group the participant data
+            part_stats = df_part_f.groupby("series").agg(
                 Sessions=("webinar_id", "nunique"),
                 Total_Attendees=("user_email", "count"),
                 Unique_Members=("user_email", "nunique")
             ).reset_index()
             
-            stats_df["Avg_Sessions_Per_Attendee"] = (stats_df["Total_Attendees"] / stats_df["Unique_Members"]).round(2)
+            # 3. Merge the stats onto the base 7 series to ensure none go missing
+            stats_df = pd.merge(base_df, part_stats, on="series", how="left").fillna(0)
             
-            # Filter to ONLY show the 7 official recurring series
-            stats_df = stats_df[stats_df["series"].isin(COACHING_SERIES)]
+            # 4. Calculate average, handling division by zero
+            stats_df["Avg_Sessions_Per_Attendee"] = (
+                stats_df["Total_Attendees"] / stats_df["Unique_Members"]
+            ).fillna(0).round(2)
             
-            stats_df = stats_df.rename(columns={
-                "series": "Coaching Series",
-                "Sessions": "Sessions",
-                "Total_Attendees": "Total Attendees",
-                "Unique_Members": "Unique Members",
-                "Avg_Sessions_Per_Attendee": "Avg Sessions / Attendee"
-            })
-            
-            st.dataframe(
-                stats_df.sort_values("Total Attendees", ascending=False), 
-                use_container_width=True, 
-                hide_index=True
-            )
+            # Clean up infinity values if any zero division snuck through
+            stats_df.loc[stats_df["Unique_Members"] == 0, "Avg_Sessions_Per_Attendee"] = 0.0
+        
+        # Ensure numbers are integers (except for the average)
+        stats_df["Sessions"] = stats_df["Sessions"].astype(int)
+        stats_df["Total_Attendees"] = stats_df["Total_Attendees"].astype(int)
+        stats_df["Unique_Members"] = stats_df["Unique_Members"].astype(int)
+        
+        # Rename columns for a clean UI
+        stats_df = stats_df.rename(columns={
+            "series": "Coaching Series",
+            "Total_Attendees": "Total Attendees",
+            "Unique_Members": "Unique Members",
+            "Avg_Sessions_Per_Attendee": "Avg Sessions / Attendee"
+        })
+        
+        # Display the table
+        st.dataframe(
+            stats_df.sort_values("Total Attendees", ascending=False), 
+            use_container_width=True, 
+            hide_index=True
+        )
 
     with tab_series:
         if df_wb_f.empty: st.info("No sessions match.")
