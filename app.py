@@ -424,17 +424,22 @@ def render_dashboard():
             stats_df["Unique_Members"]            = 0
             stats_df["Avg_Sessions_Per_Attendee"] = 0.0
         else:
+            # 1. Count actual calendar sessions (This is the source of truth for the '9')
             wb_stats = df_wb_f.groupby("series").size().reset_index(name="Sessions")
 
+            # 2. Count attendees (We do NOT count sessions here anymore to avoid merge conflicts)
             if not df_part_f.empty:
                 part_stats = df_part_f.groupby("series").agg(
                     Total_Attendees=("user_email", "count"),
-                    Unique_Members=("user_email", "nunique"),
+                    Unique_Members=("user_email", "nunique")
                 ).reset_index()
             else:
                 part_stats = pd.DataFrame(columns=["series", "Total_Attendees", "Unique_Members"])
 
-            stats_df = pd.merge(base_df, wb_stats,   on="series", how="left").fillna(0)
+            # 3. Merge calendar sessions onto the 7 core series
+            stats_df = pd.merge(base_df, wb_stats, on="series", how="left").fillna(0)
+            
+            # 4. Merge attendee data onto the result
             stats_df = pd.merge(stats_df, part_stats, on="series", how="left").fillna(0)
             stats_df["Avg_Sessions_Per_Attendee"] = 0.0
             mask = stats_df["Unique_Members"] > 0
