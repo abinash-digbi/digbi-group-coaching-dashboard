@@ -246,12 +246,18 @@ def fetch_all_webinars(user_id: str, from_date: str, to_date: str) -> list:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_participants(webinar_id: str) -> list:
+def fetch_participants(webinar_uuid: str) -> list:
     participants = []
+    
+    # Zoom requires double URL-encoding for UUIDs if they contain '/' or '//'
+    safe_uuid = webinar_uuid
+    if isinstance(safe_uuid, str) and (safe_uuid.startswith('/') or '//' in safe_uuid):
+        safe_uuid = urllib.parse.quote(urllib.parse.quote(safe_uuid, safe=''), safe='')
+        
     next_page = None
     while True:
         r = requests.get(
-            f"{ZOOM_API_BASE}/past_webinars/{webinar_id}/participants",
+            f"{ZOOM_API_BASE}/past_webinars/{safe_uuid}/participants",
             headers=get_headers(),
             params={"page_size": 300, "next_page_token": next_page},
         )
@@ -316,7 +322,9 @@ def render_dashboard():
         wb["series"]        = series
 
         if is_past:
-            pcts = fetch_participants(wb["id"])
+            # Zoom API needs the unique occurrence UUID to fetch participants for recurring meetings
+            target_id = str(wb.get("uuid", wb.get("id")))
+            pcts = fetch_participants(target_id)
             time.sleep(0.1)
             for p in pcts:
                 p["webinar_id"]    = wb["id"]
