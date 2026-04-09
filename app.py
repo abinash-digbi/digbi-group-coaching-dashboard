@@ -594,7 +594,7 @@ def render_dashboard():
                 .sort_values("total_attendances", ascending=False)
             )
 
-            st.subheader(f"Company Attendance Summary  â  .len(company_summary)} companies")
+            st.subheader(f"Company Attendance Summary  â  .len(company_summary) companies")
             st.dataframe(
                 company_summary.rename(columns={
                     "company":           "Company",
