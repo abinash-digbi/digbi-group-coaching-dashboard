@@ -60,18 +60,29 @@ def map_to_series(topic: str) -> str:
     t = clean_topic.lower()
     
     # 1. EXCLUSION CHECK (Block specific companies from the dashboard)
-    # Sensitive list moved to Streamlit secrets
-    excluded_keywords = st.secrets.get("EXCLUDED_KEYWORDS", [])
-    
-    if any(keyword in t for keyword in excluded_keywords):
-        return "Other" # Instantly categorize company-specific webinars as 'Other'
+    raw_excluded = st.secrets.get("EXCLUDED_KEYWORDS", [])
+    if isinstance(raw_excluded, str):
+        # In case the user pasted it as a comma-separated string in Streamlit Cloud
+        excluded_keywords = [k.strip().lower() for k in raw_excluded.split(",") if k.strip()]
+    elif isinstance(raw_excluded, list):
+        excluded_keywords = [str(k).strip().lower() for k in raw_excluded if k]
+    else:
+        excluded_keywords = []
+        
+    if excluded_keywords:
+        if any(keyword in t for keyword in excluded_keywords):
+            return "Other" # Instantly categorize company-specific webinars as 'Other'
 
     # 2. EXACT MATCHES (From your historical Zoom CSV reports)
-    # Sensitive matches moved to Streamlit secrets
-    exact_matches = dict(st.secrets.get("EXACT_MATCHES", {}))
+    raw_exact = st.secrets.get("EXACT_MATCHES", {})
+    if isinstance(raw_exact, dict):
+        # Streamlit sometimes lowers keys in secrets; we'll force everything lower for safety
+        exact_matches = {str(k).strip().lower(): str(v) for k, v in raw_exact.items()}
+    else:
+        exact_matches = {}
     
-    if clean_topic in exact_matches:
-        return exact_matches[clean_topic]
+    if t in exact_matches:
+        return exact_matches[t]
         
     # 3. FUZZY LOGIC FALLBACK (Catch future webinars or manual name changes)
     if "solera" in t and ("orientation" in t or "eat smart" in t or "gut only" in t):
