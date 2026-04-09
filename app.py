@@ -476,6 +476,10 @@ def render_dashboard():
             "Unique_Members":            "Unique Members",
             "Avg_Sessions_Per_Attendee": "Avg Sessions / Attendee",
         })
+
+        # Add this line to hide rows with 0 sessions
+        stats_df = stats_df[stats_df["Sessions"] > 0]
+
         st.dataframe(
             stats_df.sort_values("Total Attendees", ascending=False),
             use_container_width=True,
