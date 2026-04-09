@@ -262,12 +262,16 @@ def render_dashboard():
     sel_months = [parse_month(lbl) for lbl in sel_month_labels]
 
     mask_wb = pd.Series([True] * len(df_wb), index=df_wb.index)
+    mask_wb &= df_wb["session_date"] >= str(from_date)
+    mask_wb &= df_wb["session_date"] <= str(to_date)
     if sel_series: mask_wb &= df_wb["series"].isin(sel_series)
     if sel_months: mask_wb &= df_wb["session_month"].isin(sel_months)
     df_wb_f = df_wb[mask_wb].copy()
 
     if not df_part.empty:
         mask_p = pd.Series([True] * len(df_part), index=df_part.index)
+        mask_p &= df_part["session_date"] >= str(from_date)
+        mask_p &= df_part["session_date"] <= str(to_date)
         if sel_series: mask_p &= df_part["series"].isin(sel_series)
         if sel_months: mask_p &= df_part["session_month"].isin(sel_months)
         df_part_f = df_part[mask_p].copy()
