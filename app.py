@@ -49,21 +49,31 @@ SERIES_COLORS = {
     "Other":                              "#7f7f7f",
 }
 
-WEBINAR_LINKS = {
-    "Orientation + Eat Smart [Employer]": "https://us02web.zoom.us/webinar/87592551115",
-    "Orientation + Eat Smart [Solera]":   "https://us02web.zoom.us/webinar/84993510536",
-    "Living Well with GLP-1":             "https://us02web.zoom.us/webinar/86297068882",
-    "Fine Tuning (2-4.99% WL)":           "https://us02web.zoom.us/webinar/82971897843",
-    "Thriving with IBS":                  "https://us02web.zoom.us/webinar/83049291192",
-    "How to Read Gene & Gut Kit":         "https://us02web.zoom.us/webinar/88933558702",
-    "How to Read Gut Kit":                "https://us02web.zoom.us/webinar/81840645742",
-}
+
 
 def map_to_series(topic: str) -> str:
-    """Map a raw webinar topic string to one of the 7 coaching series."""
+    """Map a raw webinar topic string to one of the 7 coaching series, excluding specific companies."""
     if not isinstance(topic, str):
         return "Other"
-    t = topic.lower()
+        
+    clean_topic = topic.strip()
+    t = clean_topic.lower()
+    
+    # 1. EXCLUSION CHECK (Block specific companies from the dashboard)
+    # Sensitive list moved to Streamlit secrets
+    excluded_keywords = st.secrets.get("EXCLUDED_KEYWORDS", [])
+    
+    if any(keyword in t for keyword in excluded_keywords):
+        return "Other" # Instantly categorize company-specific webinars as 'Other'
+
+    # 2. EXACT MATCHES (From your historical Zoom CSV reports)
+    # Sensitive matches moved to Streamlit secrets
+    exact_matches = dict(st.secrets.get("EXACT_MATCHES", {}))
+    
+    if clean_topic in exact_matches:
+        return exact_matches[clean_topic]
+        
+    # 3. FUZZY LOGIC FALLBACK (Catch future webinars or manual name changes)
     if "solera" in t and ("orientation" in t or "eat smart" in t or "gut only" in t):
         return "Orientation + Eat Smart [Solera]"
     if "gut only" in t and ("orientation" in t or "eat smart" in t):
@@ -82,6 +92,7 @@ def map_to_series(topic: str) -> str:
         return "Fine Tuning (2-4.99% WL)"
     if "ibs" in t or "irritable" in t:
         return "Thriving with IBS"
+        
     return "Other"
 
 def fmt_month(ym: str) -> str:
@@ -248,9 +259,7 @@ def render_dashboard():
         df_wb["month_label"] = df_wb["session_month"].apply(fmt_month)
         if "join_url" not in df_wb.columns:
             df_wb["join_url"] = ""
-        df_wb["webinar_link"] = df_wb.apply(
-            lambda r: r["join_url"] if r["join_url"] else WEBINAR_LINKS.get(r["series"], ""), axis=1
-        )
+        df_wb["webinar_link"] = df_wb["join_url"]
 
     st.sidebar.header("Filters")
     all_series = sorted(df_wb["series"].unique().tolist()) if not df_wb.empty else []
