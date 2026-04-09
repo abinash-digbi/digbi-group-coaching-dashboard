@@ -49,7 +49,6 @@ SERIES_COLORS = {
     "Other":                              "#7f7f7f",
 }
 
-# Recurring Zoom webinar links (static — same IDs reused every session)
 WEBINAR_LINKS = {
     "Orientation + Eat Smart [Employer]": "https://us02web.zoom.us/webinar/87592551115",
     "Orientation + Eat Smart [Solera]":   "https://us02web.zoom.us/webinar/84993510536",
@@ -58,17 +57,6 @@ WEBINAR_LINKS = {
     "Thriving with IBS":                  "https://us02web.zoom.us/webinar/83049291192",
     "How to Read Gene & Gut Kit":         "https://us02web.zoom.us/webinar/88933558702",
     "How to Read Gut Kit":                "https://us02web.zoom.us/webinar/81840645742",
-}
-
-# Recurring schedule details
-SERIES_SCHEDULE = {
-    "Orientation + Eat Smart [Employer]": {"frequency": "Every 2 weeks", "day": "Friday",   "time": "11:00–11:45 AM PST", "audience": "Employer"},
-    "Orientation + Eat Smart [Solera]":   {"frequency": "Every 2 weeks", "day": "Friday",   "time": "12:00–12:45 PM PST", "audience": "Solera"},
-    "How to Read Gene & Gut Kit":         {"frequency": "Every 3 weeks", "day": "Friday",   "time": "11:00–11:45 AM PST", "audience": "Employer"},
-    "How to Read Gut Kit":                {"frequency": "Every 3 weeks", "day": "Friday",   "time": "12:00–12:45 PM PST", "audience": "Solera"},
-    "Living Well with GLP-1":             {"frequency": "Every 3 weeks", "day": "Thursday", "time": "11:00–11:45 AM PST", "audience": "All Members"},
-    "Fine Tuning (2-4.99% WL)":           {"frequency": "Every 2 weeks", "day": "Thursday", "time": "12:00–12:45 PM PST", "audience": "All Members"},
-    "Thriving with IBS":                  {"frequency": "Every 2 weeks", "day": "Thursday", "time": "11:00–11:45 AM PST", "audience": "All Members"},
 }
 
 def map_to_series(topic: str) -> str:
@@ -96,26 +84,13 @@ def map_to_series(topic: str) -> str:
         return "Thriving with IBS"
     return "Other"
 
-def extract_company(email: str) -> str:
-    """Infer company name from email domain."""
-    personal = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com", "protonmail.com", "live.com", "me.com", "msn.com"}
-    if not isinstance(email, str) or "@" not in email:
-        return "Unknown"
-    domain = email.split("@")[-1].lower().strip()
-    if domain in personal:
-        return "Personal Email"
-    parts = domain.split(".")
-    return parts[-2].title() if len(parts) >= 2 else domain.title()
-
 def fmt_month(ym: str) -> str:
-    """Convert 'YYYY-MM' to 'Jan 2026'."""
     try:
         return datetime.strptime(ym, "%Y-%m").strftime("%b %Y")
     except Exception:
         return ym
 
 def parse_month(label: str) -> str:
-    """Convert 'Jan 2026' to 'YYYY-MM' for sorting."""
     try:
         return datetime.strptime(label, "%b %Y").strftime("%Y-%m")
     except Exception:
@@ -161,10 +136,8 @@ def get_headers() -> dict:
 # ── Data fetching (cached) ────────────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_all_webinars(user_id: str, from_date: str, to_date: str) -> list:
-    """Fetch BOTH past and upcoming webinars."""
     webinars = []
     
-    # 1. Fetch Past
     next_page = None
     while True:
         r = requests.get(f"{ZOOM_API_BASE}/users/{user_id}/webinars", headers=get_headers(), params={"type": "past", "from": from_date, "to": to_date, "page_size": 300, "next_page_token": next_page})
@@ -174,7 +147,6 @@ def fetch_all_webinars(user_id: str, from_date: str, to_date: str) -> list:
         next_page = data.get("next_page_token")
         if not next_page: break
             
-    # 2. Fetch Upcoming
     next_page = None
     while True:
         r = requests.get(f"{ZOOM_API_BASE}/users/{user_id}/webinars", headers=get_headers(), params={"type": "upcoming", "page_size": 300, "next_page_token": next_page})
@@ -184,7 +156,6 @@ def fetch_all_webinars(user_id: str, from_date: str, to_date: str) -> list:
         next_page = data.get("next_page_token")
         if not next_page: break
 
-    # Remove duplicates
     seen = set()
     unique = []
     for w in webinars:
@@ -216,9 +187,10 @@ def get_user_id() -> str:
 def render_dashboard():
     st.sidebar.header("Date Range")
     today = date.today()
-    default_from = today - timedelta(days=365)
+    # Default to January 1st of the current year
+    default_from = date(today.year, 1, 1)
     from_date = st.sidebar.date_input("From", value=default_from)
-    to_date = st.sidebar.date_input("To", value=today + timedelta(days=60)) # Push to future for upcoming
+    to_date = st.sidebar.date_input("To", value=today + timedelta(days=60))
 
     if from_date > to_date:
         st.sidebar.error("'From' must be before 'To'.")
@@ -237,7 +209,6 @@ def render_dashboard():
     now_utc = datetime.now(timezone.utc)
 
     for i, wb in enumerate(webinars):
-        # Convert UTC to PST to respect Handover Guide
         raw_time = wb.get("start_time", "").replace("Z", "+00:00")
         try:
             utc_time = datetime.fromisoformat(raw_time)
@@ -255,10 +226,9 @@ def render_dashboard():
         wb["session_month"] = session_month
         wb["series"] = series
         
-        # Only fetch participants if the session actually happened! Prevents 400 errors.
         if is_past:
             pcts = fetch_participants(wb["id"])
-            time.sleep(0.1) # CRITICAL: Prevents 429 Too Many Requests crashes
+            time.sleep(0.1)
             for p in pcts:
                 p["webinar_id"] = wb["id"]
                 p["webinar_topic"] = wb.get("topic", "Unknown")
@@ -266,7 +236,6 @@ def render_dashboard():
                 p["session_date"] = session_date
                 p["session_month"] = session_month
                 p["join_url"] = wb.get("join_url", "")
-                p["company"] = extract_company(p.get("user_email", ""))
             all_participants.extend(pcts)
 
         progress.progress((i + 1) / len(webinars), text=f"Processing session {i+1}/{len(webinars)}")
@@ -279,7 +248,6 @@ def render_dashboard():
         df_wb["month_label"] = df_wb["session_month"].apply(fmt_month)
         if "join_url" not in df_wb.columns:
             df_wb["join_url"] = ""
-        # Apply the hardcoded fallback links from the guide
         df_wb["webinar_link"] = df_wb.apply(
             lambda r: r["join_url"] if r["join_url"] else WEBINAR_LINKS.get(r["series"], ""), axis=1
         )
@@ -293,9 +261,6 @@ def render_dashboard():
     sel_month_labels = st.sidebar.multiselect("Month", options=month_labels, default=[])
     sel_months = [parse_month(lbl) for lbl in sel_month_labels]
 
-    all_companies = sorted(df_part["company"].dropna().unique().tolist()) if not df_part.empty and "company" in df_part.columns else []
-    sel_companies = st.sidebar.multiselect("Company", options=all_companies, default=[])
-
     mask_wb = pd.Series([True] * len(df_wb), index=df_wb.index)
     if sel_series: mask_wb &= df_wb["series"].isin(sel_series)
     if sel_months: mask_wb &= df_wb["session_month"].isin(sel_months)
@@ -305,55 +270,58 @@ def render_dashboard():
         mask_p = pd.Series([True] * len(df_part), index=df_part.index)
         if sel_series: mask_p &= df_part["series"].isin(sel_series)
         if sel_months: mask_p &= df_part["session_month"].isin(sel_months)
-        if sel_companies: mask_p &= df_part["company"].isin(sel_companies)
         df_part_f = df_part[mask_p].copy()
     else:
         df_part_f = pd.DataFrame()
 
+    # ── Top-level KPI strip ───────────────────────────────────────────────────
     st.title("Digbi Health - Group Coaching Dashboard")
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4 = st.columns(4)
     total_sessions = len(df_wb_f)
     total_attendees = len(df_part_f)
     unique_members = df_part_f["user_email"].nunique() if not df_part_f.empty and "user_email" in df_part_f.columns else 0
-    unique_companies = df_part_f["company"].nunique() if not df_part_f.empty and "company" in df_part_f.columns else 0
-    avg_per_session = round(total_attendees / total_sessions, 1) if total_sessions else 0
+    avg_sessions_per_member = round(total_attendees / unique_members, 2) if unique_members else 0
 
-    k1.metric("Sessions (Inc. Upcoming)", total_sessions)
+    k1.metric("Total Sessions", total_sessions)
     k2.metric("Total Attendees", total_attendees)
     k3.metric("Unique Members", unique_members)
-    k4.metric("Companies", unique_companies)
-    k5.metric("Avg / Session", avg_per_session)
+    k4.metric("Avg Sessions / Attendee", avg_sessions_per_member)
     st.markdown("---")
 
-    tab_overview, tab_series, tab_company, tab_month, tab_participants, tab_raw = st.tabs([
-        "Overview", "By Series", "By Company", "By Month", "Participants", "Raw Data"
+    tab_overview, tab_series, tab_month, tab_participants, tab_raw = st.tabs([
+        "Overview", "By Series", "By Month", "Participants", "Raw Data"
     ])
 
     with tab_overview:
-        if df_wb_f.empty: st.info("No sessions match the current filters.")
+        if df_wb_f.empty or df_part_f.empty: 
+            st.info("No sessions or attendees match the current filters.")
         else:
-            col_a, col_b = st.columns(2)
-            with col_a:
-                sess_by_series = df_wb_f.groupby("series").size().reset_index(name="sessions").sort_values("sessions")
-                fig = px.bar(sess_by_series, x="sessions", y="series", orientation="h", title="Sessions per Coaching Series", color="series", color_discrete_map=SERIES_COLORS)
-                fig.update_layout(showlegend=False, height=350)
-                st.plotly_chart(fig, use_container_width=True)
-            with col_b:
-                if not df_part_f.empty:
-                    att_by_series = df_part_f.groupby("series").size().reset_index(name="attendees").sort_values("attendees")
-                    fig2 = px.bar(att_by_series, x="attendees", y="series", orientation="h", title="Total Attendees per Coaching Series", color="series", color_discrete_map=SERIES_COLORS)
-                    fig2.update_layout(showlegend=False, height=350)
-                    st.plotly_chart(fig2, use_container_width=True)
+            st.subheader("Stats for 7 Recurring Webinars")
             
-            st.markdown("---")
-            st.subheader("📋 Recurring Series Reference")
-            ref_rows = []
-            for s in COACHING_SERIES:
-                sc = SERIES_SCHEDULE.get(s, {})
-                ref_rows.append({"Series": s, "Audience": sc.get("audience", ""), "Frequency": sc.get("frequency", ""), "Day": sc.get("day", ""), "Time (PST)": sc.get("time", ""), "Webinar Link": WEBINAR_LINKS.get(s, "")})
-            df_ref = pd.DataFrame(ref_rows)
-            df_ref["Webinar Link"] = df_ref["Webinar Link"].apply(lambda url: f'<a href="{url}" target="_blank">Join Webinar</a>' if url else "")
-            st.markdown(df_ref.to_html(escape=False, index=False), unsafe_allow_html=True)
+            stats_df = df_part_f.groupby("series").agg(
+                Sessions=("webinar_id", "nunique"),
+                Total_Attendees=("user_email", "count"),
+                Unique_Members=("user_email", "nunique")
+            ).reset_index()
+            
+            stats_df["Avg_Sessions_Per_Attendee"] = (stats_df["Total_Attendees"] / stats_df["Unique_Members"]).round(2)
+            
+            # Filter to ONLY show the 7 official recurring series
+            stats_df = stats_df[stats_df["series"].isin(COACHING_SERIES)]
+            
+            stats_df = stats_df.rename(columns={
+                "series": "Coaching Series",
+                "Sessions": "Sessions",
+                "Total_Attendees": "Total Attendees",
+                "Unique_Members": "Unique Members",
+                "Avg_Sessions_Per_Attendee": "Avg Sessions / Attendee"
+            })
+            
+            st.dataframe(
+                stats_df.sort_values("Total Attendees", ascending=False), 
+                use_container_width=True, 
+                hide_index=True
+            )
 
     with tab_series:
         if df_wb_f.empty: st.info("No sessions match.")
@@ -381,17 +349,10 @@ def render_dashboard():
                     att = row.get("attendees", 0)
                     month_l = fmt_month(str(row.get("session_month", ""))[:7]) if row.get("session_month") else ""
                     
-                    # Highlight upcoming webinars clearly
                     is_upcoming_badge = " **[UPCOMING]** " if str(date.today()) <= d_str else ""
                     
                     if link: st.markdown(f"{is_upcoming_badge} **{d_str}** ({month_l}) &nbsp; {topic} &nbsp;&nbsp; Attendees: **{att}** &nbsp;&nbsp; [Webinar Link]({link})")
                     else: st.markdown(f"{is_upcoming_badge} **{d_str}** ({month_l}) &nbsp; {topic} &nbsp;&nbsp; Attendees: **{att}**")
-
-    with tab_company:
-        if df_part_f.empty: st.info("No participant data available.")
-        else:
-            company_summary = df_part_f[df_part_f["company"] != "Personal Email"].groupby("company").agg(total_attendances=("user_email", "count"), unique_members=("user_email", "nunique")).reset_index().sort_values("total_attendances", ascending=False)
-            st.dataframe(company_summary.head(20), use_container_width=True, hide_index=True)
 
     with tab_month:
         if df_part_f.empty: st.info("No participant data available.")
@@ -409,7 +370,7 @@ def render_dashboard():
                 q = search_q.lower()
                 mask = df_search["name"].str.lower().str.contains(q, na=False) | df_search["user_email"].str.lower().str.contains(q, na=False)
                 df_search = df_search[mask]
-            st.dataframe(df_search[["name", "user_email", "company", "series", "session_date"]].sort_values("session_date", ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(df_search[["name", "user_email", "series", "session_date"]].sort_values("session_date", ascending=False), use_container_width=True, hide_index=True)
 
     with tab_raw:
         st.subheader("Webinars")
@@ -433,7 +394,24 @@ def main():
     if "token_data" not in st.session_state:
         st.title("Digbi Health - Group Coaching Dashboard")
         st.markdown("Connect your Zoom account to view Group Coaching analytics.")
-        st.link_button("Connect Zoom Account", get_auth_url(), use_container_width=False)
+        
+        # HTML button to ensure target="_self" (Opens in same tab)
+        auth_url = get_auth_url()
+        button_html = f"""
+        <a href="{auth_url}" target="_self" style="
+            background-color: #FF4B4B; 
+            color: white; 
+            padding: 10px 20px; 
+            text-align: center; 
+            text-decoration: none; 
+            display: inline-block; 
+            border-radius: 5px; 
+            font-weight: 500;
+            font-family: sans-serif;">
+            Connect Zoom Account
+        </a>
+        """
+        st.markdown(button_html, unsafe_allow_html=True)
         return
 
     with st.sidebar:
