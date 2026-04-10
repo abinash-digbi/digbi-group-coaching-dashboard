@@ -1,22 +1,21 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: The Hybrid Engine (Zoom API + CSV History)
+Version: Google Sheets Database + Participant Breakdown
 """
 
-import time
-import requests
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
-from urllib.parse import urlencode, quote
+import requests
+import json
 
 # 1. SETUP
-st.set_page_config(page_title="Digbi Hybrid Analytics", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="Digbi Analytics", page_icon="🧬", layout="wide")
 
-CLIENT_ID     = st.secrets["ZOOM_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["ZOOM_CLIENT_SECRET"]
-REDIRECT_URI  = st.secrets["ZOOM_REDIRECT_URI"]
-ZOOM_API_BASE = "https://api.zoom.us/v2"
+try:
+    APPS_SCRIPT_URL = st.secrets["APPS_SCRIPT_URL"]
+except KeyError:
+    st.error("Please add APPS_SCRIPT_URL to your Streamlit Secrets.")
+    st.stop()
 
 COACHING_SERIES = [
     "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members",
@@ -28,21 +27,7 @@ COACHING_SERIES = [
     "Fine-Tuning Your Routine: Advanced Tips for Continued Weight Loss"
 ]
 
-# 2. HELPER FUNCTIONS
-def get_auth_url():
-    p = {"response_type": "code", "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI}
-    return f"https://zoom.us/oauth/authorize?{urlencode(p)}"
-
-def exchange_code(auth_code):
-    r = requests.post("https://zoom.us/oauth/token", params={"grant_type": "authorization_code", "code": auth_code, "redirect_uri": REDIRECT_URI}, auth=(CLIENT_ID, CLIENT_SECRET))
-    return r.json()
-
-def safe_encode_uuid(uuid_str):
-    uuid_str = str(uuid_str)
-    if '/' in uuid_str or '//' in uuid_str:
-        return quote(quote(uuid_str, safe=''), safe='')
-    return quote(uuid_str)
-
+# 2. MAPPING LOGIC
 def map_to_series(topic_str):
     if not isinstance(topic_str, str): return "Other"
     t = topic_str.strip().lower()
@@ -59,10 +44,24 @@ def map_to_series(topic_str):
     if "fine-tuning" in t or "fine tuning" in t: return COACHING_SERIES[6]
     return "Other"
 
-# 3. CSV PARSER (Historical Data)
-def parse_csv_history(uploaded_files):
-    sessions_list = []
-    parts_list = []
+# 3. DATABASE HELPER FUNCTIONS
+@st.cache_data(ttl=60, show_spinner=False)
+def load_database():
+    """Fetches existing data from Google Sheets via Apps Script"""
+    try:
+        r = requests.get(APPS_SCRIPT_URL)
+        if r.status_code == 200:
+            data = r.json()
+            if len(data) > 1: # We have data beyond the header
+                df = pd.DataFrame(data[1:], columns=data[0])
+                return df
+        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
+    except:
+        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
+
+def process_and_upload(uploaded_files, existing_df):
+    """Parses CSVs, prevents duplicates, and sends to Google Sheets"""
+    new_rows = []
     
     for file in uploaded_files:
         df = pd.read_csv(file)
@@ -73,137 +72,109 @@ def parse_csv_history(uploaded_files):
             mapped = map_to_series(row['Topic'])
             if mapped == "Other": continue
             
-            m_id = str(row['ID']).replace(" ", "")
+            s_id = str(row['ID']).replace(" ", "")
+            s_time = str(row['Start time'])
+            email = str(row.get('Email', 'no email')).strip().lower()
             
-            sessions_list.append({
-                "topic": row['Topic'],
-                "series_mapped": mapped,
-                "id": m_id,
-                "start_time": row['Start time'],
-                "source": "CSV History"
-            })
+            # Prevent Duplicates
+            is_dup = False
+            if not existing_df.empty:
+                match = existing_df[(existing_df['Session ID'].astype(str) == s_id) & 
+                                    (existing_df['Start Time'] == s_time) & 
+                                    (existing_df['Participant Email'] == email)]
+                if not match.empty:
+                    is_dup = True
             
-            # If it's a participant CSV with emails
-            if 'Email' in df.columns and pd.notna(row['Email']):
-                parts_list.append({
-                    "webinar_id": m_id,
-                    "user_email": row['Email'].strip().lower(),
-                    "series": mapped
-                })
+            if not is_dup:
+                new_rows.append([s_id, row['Topic'], mapped, s_time, email, file.name])
+                # Add to existing_df instantly to catch duplicates within the same upload batch
+                existing_df.loc[len(existing_df)] = new_rows[-1] 
                 
-    df_s = pd.DataFrame(sessions_list).drop_duplicates(subset=['id', 'start_time']) if sessions_list else pd.DataFrame()
-    df_p = pd.DataFrame(parts_list).drop_duplicates(subset=['webinar_id', 'user_email']) if parts_list else pd.DataFrame()
-    return df_s, df_p
+    if new_rows:
+        # Send to Google Apps Script
+        requests.post(APPS_SCRIPT_URL, data=json.dumps(new_rows))
+        return len(new_rows)
+    return 0
 
-# 4. ZOOM API ENGINE (Last 30 Days Live Sync)
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_recent_api(token):
-    headers = {"Authorization": f"Bearer {token}"}
-    sessions = []
-    
-    for endpoint in ["webinars", "meetings"]:
-        r = requests.get(f"{ZOOM_API_BASE}/users/me/{endpoint}", headers=headers, params={"type": "past", "page_size": 300})
-        if r.status_code == 200:
-            for item in r.json().get(endpoint, []):
-                item["is_webinar"] = (endpoint == "webinars")
-                sessions.append(item)
-    return sessions
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_api_participants(uuid, is_webinar, token):
-    headers = {"Authorization": f"Bearer {token}"}
-    safe_id = safe_encode_uuid(uuid)
-    endpoint = f"past_webinars/{safe_id}/participants" if is_webinar else f"past_meetings/{safe_id}/participants"
-    r = requests.get(f"{ZOOM_API_BASE}/{endpoint}", headers=headers, params={"page_size": 300})
-    return r.json().get("participants", []) if r.status_code == 200 else []
-
-# 5. DASHBOARD UI
+# 4. DASHBOARD UI
 def render_dashboard():
-    st.sidebar.title("Data Sources")
+    # -- SIDEBAR UPLOADER --
+    st.sidebar.title("📤 Monthly Data Importer")
+    st.sidebar.write("Drag and drop your Zoom CSV reports here. They will be saved to your Google Sheet.")
     
-    # Drag and Drop for your CSV files!
-    uploaded_files = st.sidebar.file_uploader("Upload Historical Zoom CSVs", type=['csv'], accept_multiple_files=True)
+    uploaded_files = st.sidebar.file_uploader("Upload CSVs", type=['csv'], accept_multiple_files=True)
     
-    st.sidebar.markdown("---")
-    token = st.session_state["token_data"]["access_token"]
+    db_df = load_database()
     
-    # 1. Parse uploaded CSVs
-    df_csv_sessions, df_csv_parts = parse_csv_history(uploaded_files)
-    
-    # 2. Fetch Recent API Data
-    with st.spinner("Fetching Live API Data (Last 30 Days)..."):
-        api_raw = fetch_recent_api(token)
-        
-    api_sessions = []
-    api_parts = []
-    
-    for item in api_raw:
-        m_series = map_to_series(item.get("topic", ""))
-        if m_series == "Other": continue
-        
-        item["series_mapped"] = m_series
-        item["source"] = "Live API"
-        api_sessions.append(item)
-        
-        pts = fetch_api_participants(item["uuid"], item.get("is_webinar", True), token)
-        for p in pts:
-            api_parts.append({
-                "webinar_id": str(item["id"]),
-                "user_email": p.get("user_email", "").strip().lower(),
-                "series": m_series
-            })
-            
-    df_api_sessions = pd.DataFrame(api_sessions)
-    df_api_parts = pd.DataFrame(api_parts)
+    if st.sidebar.button("Sync to Google Sheets"):
+        if uploaded_files:
+            with st.spinner("Processing files and saving to Database..."):
+                added = process_and_upload(uploaded_files, db_df)
+            st.sidebar.success(f"✅ Successfully added {added} new records!")
+            st.cache_data.clear() # Force refresh to show new data
+            st.rerun()
+        else:
+            st.sidebar.error("Upload files first!")
 
-    # 3. MERGE HYBRID DATA
-    st.title("Digbi Health - Hybrid Analytics Dashboard")
+    # -- MAIN DASHBOARD --
+    st.title("Digbi Health - Group Coaching Master Dashboard")
     
-    final_sessions = pd.concat([df_csv_sessions, df_api_sessions], ignore_index=True)
-    if not final_sessions.empty:
-        # Drop duplicates in case a session is in BOTH the CSV and the recent API fetch
-        final_sessions = final_sessions.drop_duplicates(subset=['id', 'start_time'], keep='first')
-        
-    final_parts = pd.concat([df_csv_parts, df_api_parts], ignore_index=True)
-    if not final_parts.empty:
-        final_parts = final_parts[final_parts['user_email'] != ""]
-        final_parts = final_parts.drop_duplicates(subset=['webinar_id', 'user_email'])
-
-    if final_sessions.empty:
-        st.warning("No data found. Please upload your Zoom CSVs in the sidebar to view historical data.")
+    if db_df.empty:
+        st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
         return
 
-    # ── KPIs ──
+    # Calculate Metrics
+    df_sessions = db_df.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
+    df_attendees = db_df[db_df['Participant Email'] != 'no email']
+
+    # KPIs
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Core Sessions", len(final_sessions))
-    c2.metric("Total Attendees", len(final_parts))
-    c3.metric("Unique Members", final_parts["user_email"].nunique() if not final_parts.empty else 0)
+    c1.metric("Total Tracked Sessions", len(df_sessions))
+    c2.metric("Total Attendees", len(df_attendees))
+    c3.metric("Unique Members", df_attendees['Participant Email'].nunique() if not df_attendees.empty else 0)
 
-    # ── SUMMARY TABLE ──
-    st.subheader("Series Performance Breakdown")
+    st.markdown("---")
+
+    # ── 1. AGGREGATE PERFORMANCE TABLE ──
+    st.subheader("Aggregate Series Performance")
     base = pd.DataFrame({"series": COACHING_SERIES})
-    counts = final_sessions.groupby("series_mapped").size().reset_index(name="Sessions")
     
-    if not final_parts.empty:
-        stats = final_parts.groupby("series").agg(Attendees=("user_email", "count"), Unique=("user_email", "nunique")).reset_index()
+    counts = df_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
+    
+    if not df_attendees.empty:
+        stats = df_attendees.groupby("Mapped Series").agg(Attendees=("Participant Email", "count"), Unique=("Participant Email", "nunique")).reset_index()
     else:
-        stats = pd.DataFrame(columns=["series", "Attendees", "Unique"])
+        stats = pd.DataFrame(columns=["Mapped Series", "Attendees", "Unique"])
 
-    merged = pd.merge(base, counts, left_on="series", right_on="series_mapped", how="left").fillna(0)
-    merged = pd.merge(merged, stats, on="series", how="left").fillna(0)
+    merged = pd.merge(base, counts, left_on="series", right_on="Mapped Series", how="left").fillna(0)
+    merged = pd.merge(merged, stats, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"]).fillna(0).round(1)
     
     st.dataframe(merged[["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
-    with st.expander("View Underlying Data Map (See where data came from)"):
-        st.dataframe(final_sessions[["start_time", "topic", "series_mapped", "source"]].sort_values("start_time", ascending=False))
+    st.markdown("---")
 
-# 6. ENTRY
-if "token_data" not in st.session_state:
-    if "code" in st.query_params:
-        st.session_state["token_data"] = exchange_code(st.query_params["code"])
-        st.rerun()
-    st.title("Digbi Analytics Login")
-    st.markdown(f'<a href="{get_auth_url()}" target="_self" style="background:#FF4B4B;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Login to Zoom</a>', unsafe_allow_html=True)
-else:
-    render_dashboard()
+    # ── 2. INDIVIDUAL SESSION BREAKDOWN ──
+    st.subheader("👥 Participants per Session")
+    st.write("A detailed view of how many members attended each specific date/time.")
+    
+    if not df_attendees.empty:
+        session_counts = df_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
+    else:
+        session_counts = pd.DataFrame(columns=['Session ID', 'Start Time', 'Participants'])
+
+    df_breakdown = pd.merge(df_sessions, session_counts, on=['Session ID', 'Start Time'], how='left')
+    df_breakdown['Participants'] = df_breakdown['Participants'].fillna(0).astype(int)
+
+    # Sort so newest sessions are at the top
+    df_breakdown['Sort_Date'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
+    df_breakdown = df_breakdown.sort_values(by='Sort_Date', ascending=False).drop(columns=['Sort_Date'])
+
+    display_cols = ['Start Time', 'Topic', 'Mapped Series', 'Participants', 'Session ID']
+    st.dataframe(df_breakdown[display_cols], use_container_width=True, hide_index=True)
+
+    # ── DEBUG RAW DB ──
+    with st.expander("View Underlying Google Sheets Database"):
+        st.dataframe(db_df.sort_values("Start Time", ascending=False))
+
+render_dashboard()
