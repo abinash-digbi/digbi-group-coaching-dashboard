@@ -139,7 +139,7 @@ def render_dashboard():
     start_date = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
     end_date = st.sidebar.date_input("End Date", value=date.today())
 
-    st.title("Digbi Health - Diagnostic Analytics")
+    st.title("Digbi Health -  Coaching sessions Dashboard")
     
     if db_df.empty:
         st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
