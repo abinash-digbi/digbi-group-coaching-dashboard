@@ -172,8 +172,7 @@ def render_dashboard():
 
     merged = pd.merge(base, counts, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     merged = pd.merge(merged, stats, left_on="series", right_on="Mapped Series", how="left").fillna(0)
-    merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"]).fillna(0).round(1)
-    
+    merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)    
     st.dataframe(merged[["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
     st.markdown("---")
