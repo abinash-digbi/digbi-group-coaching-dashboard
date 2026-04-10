@@ -76,11 +76,23 @@ def process_and_upload(uploaded_files, existing_df):
             s_id = str(row[id_col]).replace(" ", "")
             s_time = str(row[start_time_col])
             
+            # Extract Email
             email_val = 'no email'
             if 'Email' in df.columns and pd.notna(row['Email']): email_val = row['Email']
             elif 'User Email' in df.columns and pd.notna(row['User Email']): email_val = row['User Email']
             email = str(email_val).strip().lower()
             
+            # Extract Name (To prevent "No Email" collisions)
+            name_val = 'unknown_user'
+            if 'Name (Original Name)' in df.columns and pd.notna(row['Name (Original Name)']): name_val = row['Name (Original Name)']
+            elif 'Name' in df.columns and pd.notna(row['Name']): name_val = row['Name']
+            elif 'First Name' in df.columns: name_val = str(row.get('First Name', '')) + "_" + str(row.get('Last Name', ''))
+            
+            # If they have no email, make a fake email using their name so they don't get erased!
+            if email == 'no email' or email == '':
+                email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}"
+            
+            # Prevent Duplicates (Same person, same session)
             is_dup = False
             if not existing_df.empty:
                 match = existing_df[(existing_df['Session ID'].astype(str) == s_id) & 
