@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Deep Scraper Version: Weekly Incremental Fetching
+Report API Version: Historical Data Recovery
 """
 
 import time
@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode, quote
+from dateutil.relativedelta import relativedelta
 
 # 1. SETUP
 st.set_page_config(page_title="Digbi Analytics", page_icon="🧬", layout="wide")
@@ -50,108 +51,88 @@ def map_to_series(topic_str):
     if "join our group coaching session" in t: return COACHING_SERIES[1]
     if "genetics nutrition" in t: return COACHING_SERIES[2]
     if "gut instincts" in t or "microbiome report" in t: return COACHING_SERIES[3]
-    # April Update: Added 'living well' variation
     if "glp-1" in t or "wellness benefit" in t or "living well" in t: return COACHING_SERIES[4]
     if "thriving with ibs" in t: return COACHING_SERIES[5]
     if "fine tuning" in t or "fine-tuning" in t: return COACHING_SERIES[6]
     return "Other"
 
-# 3. DEEP SCRAPER (Fetches in weekly chunks to bypass all Zoom limits)
+# 3. REPORT API DATA FETCHING (Bypasses the "Last 30 Days" limit)
 @st.cache_data(ttl=1800, show_spinner=False)
-def scrape_all_data(target_email, start_date, end_date, token):
+def fetch_report_data(target_email, start_date, end_date, token):
     headers = {"Authorization": f"Bearer {token}"}
     all_sessions = []
     
-    # We loop WEEKLY to ensure we don't miss any recurring instances
+    # Report API requires 1-month chunks
     curr_start = start_date
     while curr_start < end_date:
-        curr_end = min(curr_start + timedelta(days=7), end_date)
+        curr_end = min(curr_start + relativedelta(months=1), end_date)
+        params = {"from": curr_start.strftime("%Y-%m-%d"), "to": curr_end.strftime("%Y-%m-%d"), "page_size": 300}
         
-        # Pull Webinars & Meetings for this week
-        params = {"type": "past", "from": curr_start.strftime("%Y-%m-%d"), "to": curr_end.strftime("%Y-%m-%d"), "page_size": 300}
+        # We check both Meetings and Webinars reports
+        # This is where the 31 sessions are hidden!
+        r_w = requests.get(f"{ZOOM_API_BASE}/report/users/{target_email}/webinars", headers=headers, params=params)
+        if r_w.status_code == 200: all_sessions.extend(r_w.json().get("webinars", []))
         
-        r_w = requests.get(f"{ZOOM_API_BASE}/users/{target_email}/webinars", headers=headers, params=params)
-        if r_w.status_code == 200: all_webinars = r_w.json().get("webinars", [])
-        else: all_webinars = []
-        
-        r_m = requests.get(f"{ZOOM_API_BASE}/users/{target_email}/meetings", headers=headers, params=params)
-        if r_m.status_code == 200: all_meetings = r_m.json().get("meetings", [])
-        else: all_meetings = []
-        
-        all_sessions.extend(all_webinars)
-        all_sessions.extend(all_meetings)
+        r_m = requests.get(f"{ZOOM_API_BASE}/report/users/{target_email}/meetings", headers=headers, params=params)
+        if r_m.status_code == 200: all_sessions.extend(r_m.json().get("meetings", []))
         
         curr_start = curr_end + timedelta(days=1)
-        
-    # Deduplicate sessions by ID and Start Time
-    unique_sessions = []
-    seen = set()
-    for s in all_sessions:
-        key = f"{s['id']}_{s['start_time']}"
-        if key not in seen:
-            seen.add(key)
-            unique_sessions.append(s)
             
-    return unique_sessions
+    return all_sessions
 
 # 4. DASHBOARD UI
 def render_dashboard():
     token = st.session_state["token_data"]["access_token"]
     
     # ── Sidebar ──
-    st.sidebar.title("Admin Filters")
-    # Identify user
-    me = requests.get(f"{ZOOM_API_BASE}/users/me", headers={"Authorization": f"Bearer {token}"}).json()
-    st.sidebar.info(f"Connected as: {me.get('email')}")
+    st.sidebar.title("Sync Control")
+    headers = {"Authorization": f"Bearer {token}"}
     
-    # Select host (defaults to hello@ if found)
-    r_users = requests.get(f"{ZOOM_API_BASE}/users", headers={"Authorization": f"Bearer {token}"}, params={"page_size": 300})
-    user_list = [u['email'] for u in r_users.json().get('users', [])] if r_users.status_code == 200 else [me.get('email')]
+    # Get user list for admin selection
+    r_users = requests.get(f"{ZOOM_API_BASE}/users", headers=headers, params={"page_size": 300})
+    user_list = [u['email'] for u in r_users.json().get('users', [])] if r_users.status_code == 200 else ["hello@digbihealth.com"]
     
     default_host = user_list.index("hello@digbihealth.com") if "hello@digbihealth.com" in user_list else 0
-    target_user = st.sidebar.selectbox("Select Webinar Host", options=user_list, index=default_host)
+    target_user = st.sidebar.selectbox("Select Host", options=user_list, index=default_host)
 
-    st.sidebar.markdown("---")
-    # SET THIS TO JAN 1st TO SEE EVERYTHING
-    sd = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
-    ed = st.sidebar.date_input("End Date", value=date.today())
+    sd = st.sidebar.date_input("From", value=date(2026, 1, 1))
+    ed = st.sidebar.date_input("To", value=date.today())
 
-    if st.sidebar.button("Logout"):
+    if st.sidebar.button("Log Out"):
         st.session_state.clear()
         st.rerun()
 
     # ── Main Content ──
-    st.title("Digbi Health - Group Coaching Analytics")
+    st.title(f"Digbi Health Group Coaching Analytics")
+    st.write(f"Showing historical report for: **{target_user}**")
     
-    with st.spinner(f"Scraping every session for {target_user}..."):
-        sessions = scrape_all_data(target_user, sd, ed, token)
+    with st.spinner(f"Accessing Zoom Reports API for {target_user}..."):
+        sessions = fetch_report_data(target_user, sd, ed, token)
 
     if not sessions:
-        st.warning(f"No sessions found for {target_user}. Try expanding the date range.")
+        st.error(f"No reports found. This account ({target_user}) might not have 'Report' permissions enabled in Zoom.")
         return
 
     df = pd.DataFrame(sessions)
     df["series"] = df["topic"].apply(map_to_series)
-    
-    # Filter for Core Coaching Only
     df_core = df[df["series"] != "Other"].copy()
 
-    # Metrics
+    # KPI Row
     k1, k2, k3 = st.columns(3)
     k1.metric("Total Core Sessions", len(df_core))
-    k2.metric("Unmapped Sessions", len(df[df["series"] == "Other"]))
-    k3.metric("Total API Hits", len(df))
+    k2.metric("Excluded (Client) Sessions", len(df[df["series"] == "Other"]))
+    k3.metric("Total Zoom Records Found", len(df))
 
-    # Summary Table
-    st.subheader("Performance by Series")
+    # Stats Table
+    st.subheader("Series Breakdown")
     base = pd.DataFrame({"series": COACHING_SERIES})
     counts = df_core.groupby("series").size().reset_index(name="Sessions Found")
     merged = pd.merge(base, counts, on="series", how="left").fillna(0)
     
     st.dataframe(merged.sort_values("Sessions Found", ascending=False), use_container_width=True, hide_index=True)
 
-    # Debug Section
-    with st.expander("Deep Debug: See All Session Topics"):
+    # Debug Data
+    with st.expander("Debug: Every single session title found in report"):
         st.dataframe(df[["start_time", "topic", "series"]].sort_values("start_time", ascending=False))
 
 # 5. ENTRY
