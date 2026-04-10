@@ -1,17 +1,17 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Instance Reconstruction Engine (Bypasses Report API)
+Version: The Hybrid Engine (Zoom API + CSV History)
 """
 
 import time
 import requests
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, date, timezone
+from datetime import datetime, date
 from urllib.parse import urlencode, quote
 
 # 1. SETUP
-st.set_page_config(page_title="Digbi Analytics", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="Digbi Hybrid Analytics", page_icon="🧬", layout="wide")
 
 CLIENT_ID     = st.secrets["ZOOM_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["ZOOM_CLIENT_SECRET"]
@@ -38,137 +38,154 @@ def exchange_code(auth_code):
     return r.json()
 
 def safe_encode_uuid(uuid_str):
-    """Crucial: Zoom requires double-encoding if a UUID contains a slash."""
     uuid_str = str(uuid_str)
     if '/' in uuid_str or '//' in uuid_str:
         return quote(quote(uuid_str, safe=''), safe='')
-    return uuid_str
+    return quote(uuid_str)
 
 def map_to_series(topic_str):
     if not isinstance(topic_str, str): return "Other"
     t = topic_str.strip().lower()
     
-    # Exclusion List
-    excluded = ["schreiber", "dexcom", "kehe", "ndphit", "silgan", "okaloosa", "azlgebt", "frp", "evry health", "raght", "mohave", "sscgp", "southern", "weston", "prism", "zachry", "city of fw", "city of fort worth", "aaa", "elbit", "vericast", "dexter", "west fargo", "naebt", "cct"]
+    excluded = ["schreiber", "dexcom", "kehe", "ndphit", "silgan", "okaloosa", "azlgebt", "frp", "evry health", "raght", "mohave", "sscgp", "southern", "weston", "prism", "zachry", "city of fw", "city of fort worth", "aaa", "elbit", "vericast", "dexter", "west fargo", "naebt", "cct", "southern star"]
     if any(k in t for k in excluded): return "Other"
 
-    # Core Mapping based exactly on your CSVs
     if "group coaching for members" in t: return COACHING_SERIES[0]
     if "join our group coaching session" in t: return COACHING_SERIES[1]
-    if "genetics nutrition" in t: return COACHING_SERIES[2]
-    if "gut instincts" in t or "microbiome report" in t: return COACHING_SERIES[3]
-    if "glp-1" in t or "wellness benefit" in t or "living well" in t: return COACHING_SERIES[4]
-    if "thriving with ibs" in t: return COACHING_SERIES[5]
-    if "fine tuning" in t or "fine-tuning" in t: return COACHING_SERIES[6]
+    if "genetics" in t or "nutrition" in t: return COACHING_SERIES[2]
+    if "instincts" in t or "microbiome" in t: return COACHING_SERIES[3]
+    if "glp" in t or "wellness benefit" in t or "living well" in t: return COACHING_SERIES[4]
+    if "ibs" in t or "irritable" in t: return COACHING_SERIES[5]
+    if "fine-tuning" in t or "fine tuning" in t: return COACHING_SERIES[6]
     return "Other"
 
-# 3. RECONSTRUCTION ENGINE (Uses only the scopes you have!)
+# 3. CSV PARSER (Historical Data)
+def parse_csv_history(uploaded_files):
+    sessions_list = []
+    parts_list = []
+    
+    for file in uploaded_files:
+        df = pd.read_csv(file)
+        if 'Topic' not in df.columns or 'Start time' not in df.columns:
+            continue
+            
+        for _, row in df.iterrows():
+            mapped = map_to_series(row['Topic'])
+            if mapped == "Other": continue
+            
+            m_id = str(row['ID']).replace(" ", "")
+            
+            sessions_list.append({
+                "topic": row['Topic'],
+                "series_mapped": mapped,
+                "id": m_id,
+                "start_time": row['Start time'],
+                "source": "CSV History"
+            })
+            
+            # If it's a participant CSV with emails
+            if 'Email' in df.columns and pd.notna(row['Email']):
+                parts_list.append({
+                    "webinar_id": m_id,
+                    "user_email": row['Email'].strip().lower(),
+                    "series": mapped
+                })
+                
+    df_s = pd.DataFrame(sessions_list).drop_duplicates(subset=['id', 'start_time']) if sessions_list else pd.DataFrame()
+    df_p = pd.DataFrame(parts_list).drop_duplicates(subset=['webinar_id', 'user_email']) if parts_list else pd.DataFrame()
+    return df_s, df_p
+
+# 4. ZOOM API ENGINE (Last 30 Days Live Sync)
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_parent_series(token):
-    """Gets all active recurring parents."""
+def fetch_recent_api(token):
     headers = {"Authorization": f"Bearer {token}"}
-    parents = []
+    sessions = []
     
     for endpoint in ["webinars", "meetings"]:
-        r = requests.get(f"{ZOOM_API_BASE}/users/me/{endpoint}", headers=headers, params={"page_size": 300})
+        r = requests.get(f"{ZOOM_API_BASE}/users/me/{endpoint}", headers=headers, params={"type": "past", "page_size": 300})
         if r.status_code == 200:
             for item in r.json().get(endpoint, []):
                 item["is_webinar"] = (endpoint == "webinars")
-                parents.append(item)
-    return parents
+                sessions.append(item)
+    return sessions
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_historical_instances(parent_id, is_webinar, token):
-    """Drills down to find the historical dates the parent actually occurred."""
-    headers = {"Authorization": f"Bearer {token}"}
-    endpoint = f"past_webinars/{parent_id}/instances" if is_webinar else f"past_meetings/{parent_id}/instances"
-    r = requests.get(f"{ZOOM_API_BASE}/{endpoint}", headers=headers)
-    if r.status_code == 200:
-        key = "webinars" if is_webinar else "meetings"
-        return r.json().get(key, [])
-    return []
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_participants_cached(uuid, is_webinar, token):
-    """Gets the participants for the specific historical instance."""
+def fetch_api_participants(uuid, is_webinar, token):
     headers = {"Authorization": f"Bearer {token}"}
     safe_id = safe_encode_uuid(uuid)
     endpoint = f"past_webinars/{safe_id}/participants" if is_webinar else f"past_meetings/{safe_id}/participants"
     r = requests.get(f"{ZOOM_API_BASE}/{endpoint}", headers=headers, params={"page_size": 300})
     return r.json().get("participants", []) if r.status_code == 200 else []
 
-# 4. DASHBOARD
+# 5. DASHBOARD UI
 def render_dashboard():
-    st.sidebar.title("Sync Filters")
-    sd = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
-    ed = st.sidebar.date_input("End Date", value=date.today())
+    st.sidebar.title("Data Sources")
     
+    # Drag and Drop for your CSV files!
+    uploaded_files = st.sidebar.file_uploader("Upload Historical Zoom CSVs", type=['csv'], accept_multiple_files=True)
+    
+    st.sidebar.markdown("---")
     token = st.session_state["token_data"]["access_token"]
     
-    with st.spinner("Reconstructing session history using your authorized scopes..."):
-        parents = fetch_parent_series(token)
-
-    if not parents:
-        st.error("No recurring series found. Ensure you are logged in as hello@digbihealth.com.")
-        return
-
-    all_participants = []
-    mapped_data = []
-
-    for parent in parents:
-        m_series = map_to_series(parent.get("topic", ""))
-        
-        # We only care about drilling down into Core Coaching sessions
-        if m_series == "Other": continue
-
-        # Fetch the past instances of this series
-        instances = fetch_historical_instances(parent["id"], parent["is_webinar"], token)
-        
-        for inst in instances:
-            if "start_time" not in inst: continue
-            
-            inst_dt = datetime.fromisoformat(inst["start_time"].replace("Z", "+00:00")).date()
-            
-            # Check if this historical occurrence falls in your sidebar date range
-            if sd <= inst_dt <= ed:
-                session_info = {
-                    "topic": parent["topic"],
-                    "series_mapped": m_series,
-                    "session_date": inst_dt,
-                    "id": parent["id"],
-                    "uuid": inst["uuid"],
-                }
-                mapped_data.append(session_info)
-                
-                # Get attendees for this specific occurrence
-                pts = fetch_participants_cached(inst["uuid"], parent["is_webinar"], token)
-                for p in pts:
-                    p.update({"series": m_series, "session_date": inst_dt})
-                    all_participants.append(p)
-                time.sleep(0.05)
-
-    df_wb = pd.DataFrame(mapped_data)
-    df_part = pd.DataFrame(all_participants) if all_participants else pd.DataFrame(columns=["series", "user_email"])
-
-    st.title("Digbi Health - Group Coaching Analytics")
+    # 1. Parse uploaded CSVs
+    df_csv_sessions, df_csv_parts = parse_csv_history(uploaded_files)
     
-    if df_wb.empty:
-        st.warning(f"Found recurring series, but no historical occurrences found between {sd} and {ed}.")
+    # 2. Fetch Recent API Data
+    with st.spinner("Fetching Live API Data (Last 30 Days)..."):
+        api_raw = fetch_recent_api(token)
+        
+    api_sessions = []
+    api_parts = []
+    
+    for item in api_raw:
+        m_series = map_to_series(item.get("topic", ""))
+        if m_series == "Other": continue
+        
+        item["series_mapped"] = m_series
+        item["source"] = "Live API"
+        api_sessions.append(item)
+        
+        pts = fetch_api_participants(item["uuid"], item.get("is_webinar", True), token)
+        for p in pts:
+            api_parts.append({
+                "webinar_id": str(item["id"]),
+                "user_email": p.get("user_email", "").strip().lower(),
+                "series": m_series
+            })
+            
+    df_api_sessions = pd.DataFrame(api_sessions)
+    df_api_parts = pd.DataFrame(api_parts)
+
+    # 3. MERGE HYBRID DATA
+    st.title("Digbi Health - Hybrid Analytics Dashboard")
+    
+    final_sessions = pd.concat([df_csv_sessions, df_api_sessions], ignore_index=True)
+    if not final_sessions.empty:
+        # Drop duplicates in case a session is in BOTH the CSV and the recent API fetch
+        final_sessions = final_sessions.drop_duplicates(subset=['id', 'start_time'], keep='first')
+        
+    final_parts = pd.concat([df_csv_parts, df_api_parts], ignore_index=True)
+    if not final_parts.empty:
+        final_parts = final_parts[final_parts['user_email'] != ""]
+        final_parts = final_parts.drop_duplicates(subset=['webinar_id', 'user_email'])
+
+    if final_sessions.empty:
+        st.warning("No data found. Please upload your Zoom CSVs in the sidebar to view historical data.")
         return
 
     # ── KPIs ──
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Core Sessions", len(df_wb))
-    c2.metric("Total Attendees", len(df_part))
-    c3.metric("Unique Members", df_part["user_email"].nunique() if not df_part.empty else 0)
+    c1.metric("Total Core Sessions", len(final_sessions))
+    c2.metric("Total Attendees", len(final_parts))
+    c3.metric("Unique Members", final_parts["user_email"].nunique() if not final_parts.empty else 0)
 
     # ── SUMMARY TABLE ──
-    st.subheader("Performance Breakdown")
+    st.subheader("Series Performance Breakdown")
     base = pd.DataFrame({"series": COACHING_SERIES})
-    counts = df_wb.groupby("series_mapped").size().reset_index(name="Sessions")
+    counts = final_sessions.groupby("series_mapped").size().reset_index(name="Sessions")
     
-    if not df_part.empty:
-        stats = df_part.groupby("series").agg(Attendees=("user_email", "count"), Unique=("user_email", "nunique")).reset_index()
+    if not final_parts.empty:
+        stats = final_parts.groupby("series").agg(Attendees=("user_email", "count"), Unique=("user_email", "nunique")).reset_index()
     else:
         stats = pd.DataFrame(columns=["series", "Attendees", "Unique"])
 
@@ -178,13 +195,15 @@ def render_dashboard():
     
     st.dataframe(merged[["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
-# 5. ENTRY
+    with st.expander("View Underlying Data Map (See where data came from)"):
+        st.dataframe(final_sessions[["start_time", "topic", "series_mapped", "source"]].sort_values("start_time", ascending=False))
+
+# 6. ENTRY
 if "token_data" not in st.session_state:
     if "code" in st.query_params:
         st.session_state["token_data"] = exchange_code(st.query_params["code"])
         st.rerun()
     st.title("Digbi Analytics Login")
-    login_url = get_auth_url()
-    st.markdown(f'<a href="{login_url}" target="_self" style="background:#FF4B4B;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Login to Zoom</a>', unsafe_allow_html=True)
+    st.markdown(f'<a href="{get_auth_url()}" target="_self" style="background:#FF4B4B;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Login to Zoom</a>', unsafe_allow_html=True)
 else:
     render_dashboard()
