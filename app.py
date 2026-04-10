@@ -1,12 +1,13 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Google Sheets Database + Graphs & Deep Dive
+Version: Apps Script Database + Date Filters + Graphs
 """
 
 import streamlit as st
 import pandas as pd
 import requests
 import json
+from datetime import date
 
 # 1. SETUP
 st.set_page_config(page_title="Digbi Analytics", page_icon="🧬", layout="wide")
@@ -121,6 +122,12 @@ def render_dashboard():
         else:
             st.sidebar.error("Upload files first!")
 
+    # -- SIDEBAR DATE FILTERS (NEW) --
+    st.sidebar.markdown("---")
+    st.sidebar.title("📅 Dashboard Filters")
+    start_date = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
+    end_date = st.sidebar.date_input("End Date", value=date.today())
+
     # -- MAIN DASHBOARD --
     st.title("Digbi Health - Group Coaching Analytics")
     
@@ -128,9 +135,21 @@ def render_dashboard():
         st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
         return
 
-    # Data Prep
-    df_sessions = db_df.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
-    df_attendees = db_df[db_df['Participant Email'] != 'no email']
+    # FILTER DATA BY SELECTED DATES
+    # 1. Convert the 'Start Time' string into an actual date object
+    db_df['Clean_Date'] = pd.to_datetime(db_df['Start Time'], errors='coerce').dt.date
+    
+    # 2. Keep only the rows that fall between the Start and End dates
+    mask = (db_df['Clean_Date'] >= start_date) & (db_df['Clean_Date'] <= end_date)
+    filtered_db = db_df.loc[mask].copy()
+
+    if filtered_db.empty:
+        st.warning(f"No sessions found between {start_date} and {end_date}.")
+        return
+
+    # Data Prep using the FILTERED database
+    df_sessions = filtered_db.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
+    df_attendees = filtered_db[filtered_db['Participant Email'] != 'no email'].copy()
 
     # Master KPIs
     c1, c2, c3 = st.columns(3)
@@ -182,11 +201,11 @@ def render_dashboard():
 
     if selected_series != "-- Choose a Series to view details --":
         # Filter data to only show the selected series
-        filtered_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("Date")
+        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("Date")
         
         # Mini KPIs for this specific series
-        total_sesh = len(filtered_df)
-        total_att = filtered_df['Participants'].sum()
+        total_sesh = len(filtered_series_df)
+        total_att = filtered_series_df['Participants'].sum()
         unique_att = df_attendees[df_attendees['Mapped Series'] == selected_series]['Participant Email'].nunique()
         
         mc1, mc2, mc3 = st.columns(3)
@@ -197,7 +216,7 @@ def render_dashboard():
         # Graph
         st.subheader("Attendance Trend Over Time")
         # Group by Date in case they ran two sessions on the same day
-        chart_data = filtered_df.groupby('Date')['Participants'].sum().reset_index()
+        chart_data = filtered_series_df.groupby('Date')['Participants'].sum().reset_index()
         # Set Date as index for the Streamlit Bar Chart
         chart_data.set_index('Date', inplace=True)
         st.bar_chart(chart_data, color="#FF4B4B")
@@ -205,7 +224,7 @@ def render_dashboard():
         # Session Details Log
         st.subheader("Detailed Session Log")
         display_cols = ['Date', 'Start Time', 'Topic', 'Participants', 'Session ID']
-        st.dataframe(filtered_df[display_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(filtered_series_df[display_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
 
     # ── DEBUG RAW DB ──
     st.markdown("---")
