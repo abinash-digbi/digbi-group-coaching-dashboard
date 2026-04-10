@@ -1,15 +1,15 @@
 """
 Digbi Health — Group Coaching Dashboard
-Report API Version: Historical Data Recovery
+Standard API Version (Works with your specific Scopes)
 """
 
 import time
 import requests
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import urlencode, quote
-from dateutil.relativedelta import relativedelta
 
 # 1. SETUP
 st.set_page_config(page_title="Digbi Analytics", page_icon="🧬", layout="wide")
@@ -19,6 +19,7 @@ CLIENT_SECRET = st.secrets["ZOOM_CLIENT_SECRET"]
 REDIRECT_URI  = st.secrets["ZOOM_REDIRECT_URI"]
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 
+# Exact character-matched titles from your Jan-Apr CSV reports
 COACHING_SERIES = [
     "Digbi Health Orientation & How to Eat Smart - Group Coaching for Members",
     "Digbi Health Orientation & How to Eat Smart - Join Our Group Coaching Session",
@@ -38,110 +39,114 @@ def exchange_code(auth_code):
     r = requests.post("https://zoom.us/oauth/token", params={"grant_type": "authorization_code", "code": auth_code, "redirect_uri": REDIRECT_URI}, auth=(CLIENT_ID, CLIENT_SECRET))
     return r.json()
 
+def safe_encode_uuid(uuid_str):
+    if uuid_str.startswith('/') or '//' in uuid_str:
+        return quote(quote(uuid_str, safe=''), safe='')
+    return uuid_str
+
 def map_to_series(topic_str):
     if not isinstance(topic_str, str): return "Other"
     t = topic_str.strip().lower()
     
-    # 1. Company Exclusion List
+    # Exclusion List: Block one-off client webinars
     excluded = ["schreiber", "dexcom", "kehe", "ndphit", "silgan", "okaloosa", "azlgebt", "frp", "evry health", "raght", "mohave", "sscgp", "southern", "weston", "prism", "zachry", "city of fw", "city of fort worth", "aaa", "elbit", "vericast", "dexter", "west fargo", "naebt", "cct"]
     if any(k in t for k in excluded): return "Other"
 
-    # 2. Core Mapping (Matched to your CSV topics)
     if "group coaching for members" in t: return COACHING_SERIES[0]
     if "join our group coaching session" in t: return COACHING_SERIES[1]
     if "genetics nutrition" in t: return COACHING_SERIES[2]
     if "gut instincts" in t or "microbiome report" in t: return COACHING_SERIES[3]
+    # April Update: Catching new GLP-1 title
     if "glp-1" in t or "wellness benefit" in t or "living well" in t: return COACHING_SERIES[4]
     if "thriving with ibs" in t: return COACHING_SERIES[5]
     if "fine tuning" in t or "fine-tuning" in t: return COACHING_SERIES[6]
     return "Other"
 
-# 3. REPORT API DATA FETCHING (Bypasses the "Last 30 Days" limit)
+# 3. DATA FETCHING (Using Standard Endpoints)
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_report_data(target_email, start_date, end_date, token):
+def fetch_sessions_standard(token):
     headers = {"Authorization": f"Bearer {token}"}
-    all_sessions = []
+    results = []
     
-    # Report API requires 1-month chunks
-    curr_start = start_date
-    while curr_start < end_date:
-        curr_end = min(curr_start + relativedelta(months=1), end_date)
-        params = {"from": curr_start.strftime("%Y-%m-%d"), "to": curr_end.strftime("%Y-%m-%d"), "page_size": 300}
+    # A. Fetch Past Webinars (Standard List)
+    # Note: Standard API usually only returns last 30 days of past sessions
+    r_w = requests.get(f"{ZOOM_API_BASE}/users/me/webinars", headers=headers, params={"type": "past", "page_size": 300})
+    if r_w.status_code == 200:
+        results.extend(r_w.json().get("webinars", []))
+    
+    # B. Fetch Past Meetings (Your April CSV showed Meetings!)
+    r_m = requests.get(f"{ZOOM_API_BASE}/users/me/meetings", headers=headers, params={"type": "past", "page_size": 300})
+    if r_m.status_code == 200:
+        results.extend(r_m.json().get("meetings", []))
         
-        # We check both Meetings and Webinars reports
-        # This is where the 31 sessions are hidden!
-        r_w = requests.get(f"{ZOOM_API_BASE}/report/users/{target_email}/webinars", headers=headers, params=params)
-        if r_w.status_code == 200: all_sessions.extend(r_w.json().get("webinars", []))
-        
-        r_m = requests.get(f"{ZOOM_API_BASE}/report/users/{target_email}/meetings", headers=headers, params=params)
-        if r_m.status_code == 200: all_sessions.extend(r_m.json().get("meetings", []))
-        
-        curr_start = curr_end + timedelta(days=1)
-            
-    return all_sessions
+    return results
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_participants(uuid, is_webinar, token):
+    headers = {"Authorization": f"Bearer {token}"}
+    safe_id = safe_encode_uuid(uuid)
+    endpoint = f"past_webinars/{safe_id}/participants" if is_webinar else f"past_meetings/{safe_id}/participants"
+    r = requests.get(f"{ZOOM_API_BASE}/{endpoint}", headers=headers, params={"page_size": 300})
+    return r.json().get("participants", []) if r.status_code == 200 else []
 
 # 4. DASHBOARD UI
 def render_dashboard():
     token = st.session_state["token_data"]["access_token"]
     
-    # ── Sidebar ──
-    st.sidebar.title("Sync Control")
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    # Get user list for admin selection
-    r_users = requests.get(f"{ZOOM_API_BASE}/users", headers=headers, params={"page_size": 300})
-    user_list = [u['email'] for u in r_users.json().get('users', [])] if r_users.status_code == 200 else ["hello@digbihealth.com"]
-    
-    default_host = user_list.index("hello@digbihealth.com") if "hello@digbihealth.com" in user_list else 0
-    target_user = st.sidebar.selectbox("Select Host", options=user_list, index=default_host)
+    with st.spinner("Syncing sessions using Standard API..."):
+        all_found = fetch_sessions_standard(token)
 
-    sd = st.sidebar.date_input("From", value=date(2026, 1, 1))
-    ed = st.sidebar.date_input("To", value=date.today())
-
-    if st.sidebar.button("Log Out"):
-        st.session_state.clear()
-        st.rerun()
-
-    # ── Main Content ──
-    st.title(f"Digbi Health Group Coaching Analytics")
-    st.write(f"Showing historical report for: **{target_user}**")
-    
-    with st.spinner(f"Accessing Zoom Reports API for {target_user}..."):
-        sessions = fetch_report_data(target_user, sd, ed, token)
-
-    if not sessions:
-        st.error(f"No reports found. This account ({target_user}) might not have 'Report' permissions enabled in Zoom.")
+    if not all_found:
+        st.error("No sessions found. Check if hello@digbihealth.com is the account currently logged in.")
         return
 
-    df = pd.DataFrame(sessions)
-    df["series"] = df["topic"].apply(map_to_series)
-    df_core = df[df["series"] != "Other"].copy()
+    all_parts = []
+    mapped_sessions = []
+    now_utc = datetime.now(timezone.utc)
 
-    # KPI Row
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Total Core Sessions", len(df_core))
-    k2.metric("Excluded (Client) Sessions", len(df[df["series"] == "Other"]))
-    k3.metric("Total Zoom Records Found", len(df))
+    for item in all_found:
+        m_name = map_to_series(item.get("topic", ""))
+        item["series_mapped"] = m_name
+        mapped_sessions.append(item)
+        
+        if m_name != "Other":
+            # Participant Logic
+            is_web = "webinar" in str(item.get("type", "")).lower() or item.get("type") in [5, 6, 9]
+            pts = fetch_participants(item["uuid"], is_web, token)
+            for p in pts:
+                p.update({"series": m_name, "webinar_id": item["id"]})
+                all_participants.append(p)
+            time.sleep(0.1)
 
-    # Stats Table
-    st.subheader("Series Breakdown")
-    base = pd.DataFrame({"series": COACHING_SERIES})
-    counts = df_core.groupby("series").size().reset_index(name="Sessions Found")
-    merged = pd.merge(base, counts, on="series", how="left").fillna(0)
+    df_wb = pd.DataFrame(mapped_sessions)
+    df_part = pd.DataFrame(all_participants) if all_participants else pd.DataFrame()
+
+    st.title("Digbi Health - Group Coaching Dashboard")
     
-    st.dataframe(merged.sort_values("Sessions Found", ascending=False), use_container_width=True, hide_index=True)
+    # Summary Table
+    st.subheader("Series Performance Breakdown")
+    base = pd.DataFrame({"series": COACHING_SERIES})
+    counts = df_wb[df_wb["series_mapped"] != "Other"].groupby("series_mapped").size().reset_index(name="Sessions")
+    
+    if not df_part.empty:
+        stats = df_part.groupby("series").agg(Attendees=("user_email", "count"), Unique=("user_email", "nunique")).reset_index()
+    else:
+        stats = pd.DataFrame(columns=["series", "Attendees", "Unique"])
 
-    # Debug Data
-    with st.expander("Debug: Every single session title found in report"):
-        st.dataframe(df[["start_time", "topic", "series"]].sort_values("start_time", ascending=False))
+    merged = pd.merge(base, counts, left_on="series", right_on="series_mapped", how="left").fillna(0)
+    merged = pd.merge(merged, stats, on="series", how="left").fillna(0)
+    
+    st.dataframe(merged[["series", "Sessions", "Attendees", "Unique"]], use_container_width=True, hide_index=True)
+
+    with st.expander("Debug: Sessions Found"):
+        st.dataframe(df_wb[["start_time", "topic", "series_mapped", "id"]].sort_values("start_time", ascending=False))
 
 # 5. ENTRY
 if "token_data" not in st.session_state:
     if "code" in st.query_params:
         st.session_state["token_data"] = exchange_code(st.query_params["code"])
         st.rerun()
-    st.title("Digbi Analytics Login")
-    login_url = get_auth_url()
-    st.markdown(f'<a href="{login_url}" target="_self" style="background:#FF4B4B;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Login to Zoom Account</a>', unsafe_allow_html=True)
+    st.title("Login to Digbi Zoom")
+    st.markdown(f'<a href="{get_auth_url()}" target="_self" style="background:#FF4B4B;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Connect Zoom Account</a>', unsafe_allow_html=True)
 else:
     render_dashboard()
