@@ -60,21 +60,34 @@ def load_database():
         return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
 
 def process_and_upload(uploaded_files, existing_df):
-    """Parses CSVs, prevents duplicates, and sends to Google Sheets"""
+    """Parses CSVs, prevents duplicates, and sends to Google Sheets safely"""
     new_rows = []
     
     for file in uploaded_files:
         df = pd.read_csv(file)
-        if 'Topic' not in df.columns or 'Start time' not in df.columns:
+        
+        # Make column checking more flexible to account for Zoom format changes
+        if 'Topic' not in df.columns:
+            continue
+            
+        start_time_col = 'Start time' if 'Start time' in df.columns else 'Start Time'
+        id_col = 'ID' if 'ID' in df.columns else 'Meeting ID'
+        
+        if start_time_col not in df.columns or id_col not in df.columns:
             continue
             
         for _, row in df.iterrows():
             mapped = map_to_series(row['Topic'])
             if mapped == "Other": continue
             
-            s_id = str(row['ID']).replace(" ", "")
-            s_time = str(row['Start time'])
-            email = str(row.get('Email', 'no email')).strip().lower()
+            s_id = str(row[id_col]).replace(" ", "")
+            s_time = str(row[start_time_col])
+            
+            # Look for Email or User Email columns
+            email_val = 'no email'
+            if 'Email' in df.columns and pd.notna(row['Email']): email_val = row['Email']
+            elif 'User Email' in df.columns and pd.notna(row['User Email']): email_val = row['User Email']
+            email = str(email_val).strip().lower()
             
             # Prevent Duplicates
             is_dup = False
@@ -87,13 +100,24 @@ def process_and_upload(uploaded_files, existing_df):
             
             if not is_dup:
                 new_rows.append([s_id, row['Topic'], mapped, s_time, email, file.name])
-                # Add to existing_df instantly to catch duplicates within the same upload batch
                 existing_df.loc[len(existing_df)] = new_rows[-1] 
                 
     if new_rows:
-        # Send to Google Apps Script
-        requests.post(APPS_SCRIPT_URL, data=json.dumps(new_rows))
-        return len(new_rows)
+        # Send to Google Apps Script and check the exact response!
+        try:
+            # Using json=new_rows ensures the format is perfectly read by Google
+            r = requests.post(APPS_SCRIPT_URL, json=new_rows)
+            
+            # If Google sends back an error message, show it to the user
+            if "error" in r.text.lower():
+                st.error(f"Google Apps Script Error: {r.text}")
+                return 0
+                
+            return len(new_rows)
+        except Exception as e:
+            st.error(f"Failed to connect to Google Sheets: {e}")
+            return 0
+            
     return 0
 
 # 4. DASHBOARD UI
