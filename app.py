@@ -29,8 +29,8 @@ COACHING_SERIES = [
     "Learn to Read and Apply Your Genetics Nutrition and Gut Monitoring Reports for Better Health",
     "Follow Your Gut Instincts: Understanding Your Gut Microbiome Report",
     "Introducing Digbi Health: An Exclusive Wellness Benefit with access to GLP-1s",
-    "Thriving with IBS Group Coaching",
-    "Fine Tuning Group Coaching (2-4.99% WL)"
+    "Thriving with IBS: A Group Coaching Program for Relief and Empowerment",
+    "Fine-Tuning Your Routine: Advanced Tips for Continued Weight Loss"
 ]
 
 # ── Robust Mapping Logic ─────────────────────────────────────────────────────
@@ -38,8 +38,15 @@ def map_to_series(topic: str) -> str:
     if not isinstance(topic, str): return "Other"
     t_lower = topic.strip().lower()
 
-    # 1. Company Exclusion List
-    excluded = ["schreiber", "dexcom", "kehe", "ndphit", "silgan", "okaloosa", "azlgebt", "frp", "evry health", "raght", "mohave", "sscgp", "southern", "weston", "prism", "zachry", "city of fw", "city of fort worth", "aaa", "elbit", "vericast", "dexter", "west fargo", "naebt", "cct"]
+    # 1. Company Exclusion List (Hidden in Streamlit secrets)
+    raw_excluded = st.secrets.get("EXCLUDED_KEYWORDS", [])
+    if isinstance(raw_excluded, str):
+        excluded = [k.strip().lower() for k in raw_excluded.split(",") if k.strip()]
+    elif isinstance(raw_excluded, list):
+        excluded = [str(k).strip().lower() for k in raw_excluded if k]
+    else:
+        excluded = []
+        
     if any(k in t_lower for k in excluded): return "Other"
 
     # 2. Exact Title Matching (Direct from your CSVs)
@@ -53,10 +60,15 @@ def map_to_series(topic: str) -> str:
         return "Follow Your Gut Instincts: Understanding Your Gut Microbiome Report"
     if "glp-1" in t_lower or "exclusive wellness benefit" in t_lower:
         return "Introducing Digbi Health: An Exclusive Wellness Benefit with access to GLP-1s"
+    
+    # 3. CORRECTED: IBS matching
     if "thriving with ibs" in t_lower:
-        return "Thriving with IBS Group Coaching"
-    if "fine tuning" in t_lower:
-        return "Fine Tuning Group Coaching (2-4.99% WL)"
+        return "Thriving with IBS: A Group Coaching Program for Relief and Empowerment"
+    
+    # 4. CORRECTED: Fine Tuning matching
+    if "fine-tuning" in t_lower or "fine tuning" in t_lower:
+        return "Fine-Tuning Your Routine: Advanced Tips for Continued Weight Loss"
+    
     return "Other"
 
 # ── API Helpers ──────────────────────────────────────────────────────────────
