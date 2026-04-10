@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Apps Script Database + Date Filters + Graphs
+Version: Validated Uploads & Chronological Sorting
 """
 
 import streamlit as st
@@ -54,21 +54,39 @@ def load_database():
             data = r.json()
             if len(data) > 1: 
                 df = pd.DataFrame(data[1:], columns=data[0])
-                return df
+                
+                # AUTO-REARRANGING LOGIC: Sort oldest to newest
+                df['Temp_Date'] = pd.to_datetime(df['Start Time'], errors='coerce')
+                df = df.sort_values(by='Temp_Date', ascending=True).drop(columns=['Temp_Date'])
+                return df.reset_index(drop=True)
+                
         return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
     except:
         return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
 
 def process_and_upload(uploaded_files, existing_df):
     new_rows = []
+    
     for file in uploaded_files:
-        df = pd.read_csv(file)
-        
-        if 'Topic' not in df.columns: continue
-        start_time_col = 'Start time' if 'Start time' in df.columns else 'Start Time'
-        id_col = 'ID' if 'ID' in df.columns else 'Meeting ID'
-        if start_time_col not in df.columns or id_col not in df.columns: continue
+        try:
+            df = pd.read_csv(file)
+        except Exception:
+            st.error(f"❌ '{file.name}' is not a valid CSV file. Skipped.")
+            continue
             
+        # ZOOM FILE VALIDATOR
+        if 'Topic' not in df.columns:
+            st.warning(f"⚠️ '{file.name}' is missing the 'Topic' column. This doesn't look like a Zoom CSV. Skipped.")
+            continue
+            
+        start_time_col = 'Start time' if 'Start time' in df.columns else ('Start Time' if 'Start Time' in df.columns else None)
+        id_col = 'ID' if 'ID' in df.columns else ('Meeting ID' if 'Meeting ID' in df.columns else None)
+        
+        if not start_time_col or not id_col:
+            st.warning(f"⚠️ '{file.name}' is missing standard Zoom data ('Start time' or 'ID'). Skipped.")
+            continue
+            
+        # PROCESS VALID ZOOM DATA
         for _, row in df.iterrows():
             mapped = map_to_series(row['Topic'])
             if mapped == "Other": continue
@@ -76,23 +94,22 @@ def process_and_upload(uploaded_files, existing_df):
             s_id = str(row[id_col]).replace(" ", "")
             s_time = str(row[start_time_col])
             
-            # Extract Email
+            # Extract Email safely
             email_val = 'no email'
             if 'Email' in df.columns and pd.notna(row['Email']): email_val = row['Email']
             elif 'User Email' in df.columns and pd.notna(row['User Email']): email_val = row['User Email']
             email = str(email_val).strip().lower()
             
-            # Extract Name (To prevent "No Email" collisions)
+            # Extract Name (To prevent "No Email" collisions dropping unique attendees)
             name_val = 'unknown_user'
             if 'Name (Original Name)' in df.columns and pd.notna(row['Name (Original Name)']): name_val = row['Name (Original Name)']
             elif 'Name' in df.columns and pd.notna(row['Name']): name_val = row['Name']
             elif 'First Name' in df.columns: name_val = str(row.get('First Name', '')) + "_" + str(row.get('Last Name', ''))
             
-            # If they have no email, make a fake email using their name so they don't get erased!
             if email == 'no email' or email == '':
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}"
             
-            # Prevent Duplicates (Same person, same session)
+            # Prevent Duplicates
             is_dup = False
             if not existing_df.empty:
                 match = existing_df[(existing_df['Session ID'].astype(str) == s_id) & 
@@ -120,21 +137,22 @@ def process_and_upload(uploaded_files, existing_df):
 def render_dashboard():
     # -- SIDEBAR UPLOADER --
     st.sidebar.title("📤 Monthly Data Importer")
-    st.sidebar.write("Drag and drop your Zoom CSV reports here.")
+    st.sidebar.write("Only official Zoom CSV reports will be accepted.")
     uploaded_files = st.sidebar.file_uploader("Upload CSVs", type=['csv'], accept_multiple_files=True)
     db_df = load_database()
     
     if st.sidebar.button("Sync to Google Sheets"):
         if uploaded_files:
-            with st.spinner("Processing files and saving to Database..."):
+            with st.spinner("Validating files and saving to Database..."):
                 added = process_and_upload(uploaded_files, db_df)
-            st.sidebar.success(f"✅ Successfully added {added} new records!")
+            if added > 0:
+                st.sidebar.success(f"✅ Successfully added {added} new records!")
             st.cache_data.clear() 
             st.rerun()
         else:
             st.sidebar.error("Upload files first!")
 
-    # -- SIDEBAR DATE FILTERS (NEW) --
+    # -- SIDEBAR DATE FILTERS --
     st.sidebar.markdown("---")
     st.sidebar.title("📅 Dashboard Filters")
     start_date = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
@@ -148,10 +166,7 @@ def render_dashboard():
         return
 
     # FILTER DATA BY SELECTED DATES
-    # 1. Convert the 'Start Time' string into an actual date object
     db_df['Clean_Date'] = pd.to_datetime(db_df['Start Time'], errors='coerce').dt.date
-    
-    # 2. Keep only the rows that fall between the Start and End dates
     mask = (db_df['Clean_Date'] >= start_date) & (db_df['Clean_Date'] <= end_date)
     filtered_db = db_df.loc[mask].copy()
 
@@ -161,7 +176,7 @@ def render_dashboard():
 
     # Data Prep using the FILTERED database
     df_sessions = filtered_db.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
-    df_attendees = filtered_db[filtered_db['Participant Email'] != 'no email'].copy()
+    df_attendees = filtered_db[~filtered_db['Participant Email'].str.startswith('no_email_unknown_user')].copy()
 
     # Master KPIs
     c1, c2, c3 = st.columns(3)
@@ -184,7 +199,7 @@ def render_dashboard():
     merged = pd.merge(base, counts, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     merged = pd.merge(merged, stats, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     
-    # Safe Division to prevent ZeroDivisionError
+    # Safe Division
     merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
     
     st.dataframe(merged[["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
@@ -195,7 +210,6 @@ def render_dashboard():
     st.header("📈 Series Deep Dive")
     st.write("Select a specific coaching series to view its timeline, graphs, and attendee logs.")
     
-    # Calculate attendance per session for the graphing engine
     if not df_attendees.empty:
         session_counts = df_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
     else:
@@ -204,18 +218,15 @@ def render_dashboard():
     df_breakdown = pd.merge(df_sessions, session_counts, on=['Session ID', 'Start Time'], how='left')
     df_breakdown['Participants'] = df_breakdown['Participants'].fillna(0).astype(int)
     
-    # Format the Date for nice charting
     df_breakdown['Date'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce').dt.date
 
-    # Dropdown Filter
     series_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
     selected_series = st.selectbox("Select Coaching Series:", ["-- Choose a Series to view details --"] + series_options)
 
     if selected_series != "-- Choose a Series to view details --":
-        # Filter data to only show the selected series
-        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("Date")
+        # Ascending sort: Oldest top, newest bottom
+        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("Date", ascending=True)
         
-        # Mini KPIs for this specific series
         total_sesh = len(filtered_series_df)
         total_att = filtered_series_df['Participants'].sum()
         unique_att = df_attendees[df_attendees['Mapped Series'] == selected_series]['Participant Email'].nunique()
@@ -225,22 +236,20 @@ def render_dashboard():
         mc2.metric("Total Attendees", total_att)
         mc3.metric("Unique Members", unique_att)
 
-        # Graph
         st.subheader("Attendance Trend Over Time")
-        # Group by Date in case they ran two sessions on the same day
         chart_data = filtered_series_df.groupby('Date')['Participants'].sum().reset_index()
-        # Set Date as index for the Streamlit Bar Chart
         chart_data.set_index('Date', inplace=True)
         st.bar_chart(chart_data, color="#FF4B4B")
 
-        # Session Details Log
         st.subheader("Detailed Session Log")
         display_cols = ['Date', 'Start Time', 'Topic', 'Participants', 'Session ID']
-        st.dataframe(filtered_series_df[display_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+        # Ascending sort applied here too!
+        st.dataframe(filtered_series_df[display_cols].sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
 
     # ── DEBUG RAW DB ──
     st.markdown("---")
     with st.expander("View Underlying Google Sheets Database"):
-        st.dataframe(db_df.sort_values("Start Time", ascending=False))
+        # Shows oldest records at the top, newest at the bottom automatically
+        st.dataframe(db_df.drop(columns=['Clean_Date']))
 
 render_dashboard()
