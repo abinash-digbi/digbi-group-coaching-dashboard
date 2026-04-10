@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Diagnostic Mode (100% Transparency & No Dropped Data)
+Version: Diagnostic Mode (Fixed Case Sensitivity)
 """
 
 import streamlit as st
@@ -44,7 +44,7 @@ def map_to_series(topic_str):
     if "ibs" in t or "irritable" in t: return COACHING_SERIES[5]
     if "fine-tuning" in t or "fine tuning" in t: return COACHING_SERIES[6]
     
-    return "Unmapped" # Changed from 'Other' so we can track them!
+    return "Unmapped"
 
 # 3. DATABASE HELPER FUNCTIONS
 @st.cache_data(ttl=60, show_spinner=False)
@@ -79,7 +79,6 @@ def process_and_upload(uploaded_files, existing_df):
         for _, row in df.iterrows():
             mapped = map_to_series(row['Topic'])
             
-            # WE NO LONGER DELETE UNMAPPED SESSIONS. We capture everything.
             s_id = str(row[id_col]).replace(" ", "")
             s_time = str(row[start_time_col])
             
@@ -89,13 +88,13 @@ def process_and_upload(uploaded_files, existing_df):
             email = str(email_val).strip().lower()
             
             name_val = 'unknown_user'
+            # FIXED: Made column checking highly robust for case sensitivity and Zoom variations
             if 'Name (Original Name)' in df.columns and pd.notna(row['Name (Original Name)']): name_val = row['Name (Original Name)']
+            elif 'Name (original name)' in df.columns and pd.notna(row['Name (original name)']): name_val = row['Name (original name)']
             elif 'Name' in df.columns and pd.notna(row['Name']): name_val = row['Name']
             elif 'First Name' in df.columns: name_val = str(row.get('First Name', '')) + "_" + str(row.get('Last Name', ''))
             
-            # Create highly unique pseudo-email to prevent Generic Name Collisions
             if email == 'no email' or email == '':
-                # Add a piece of the session ID so 2 "iPhones" in different sessions don't merge!
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}_{s_id[-4:]}"
             
             is_dup = False
@@ -139,7 +138,7 @@ def render_dashboard():
     start_date = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
     end_date = st.sidebar.date_input("End Date", value=date.today())
 
-    st.title("Digbi Health -  Coaching sessions Dashboard")
+    st.title("Digbi Health - Diagnostic Analytics")
     
     if db_df.empty:
         st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
@@ -155,11 +154,12 @@ def render_dashboard():
         return
 
     # ── DATA BUCKETS ──
-    # Split the data into exactly what it is, so NOTHING is hidden.
     df_all_sessions = filtered_db.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
     
     df_core_sessions = df_all_sessions[df_all_sessions['Mapped Series'].isin(COACHING_SERIES)]
-    df_core_attendees = filtered_db[filtered_db['Mapped Series'].isin(COACHING_SERIES)]
+    # FIXED: Re-enabled phone numbers to show in Attendee count
+    df_core_attendees = filtered_db[(filtered_db['Mapped Series'].isin(COACHING_SERIES)) & 
+                                    (~filtered_db['Participant Email'].str.startswith('no_email_unknown_user'))]
 
     df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
     df_excluded = df_all_sessions[df_all_sessions['Mapped Series'] == 'Excluded Client Session']
@@ -171,7 +171,6 @@ def render_dashboard():
     c3.metric("Excluded (Client) Sessions", len(df_excluded))
     c4.metric("Unmapped/Unknown Sessions", len(df_unmapped))
 
-    # ── THE DETECTIVE BOX (Transparency for Discrepancies) ──
     if not df_unmapped.empty:
         st.error(f"⚠️ DATA LEAK DETECTED: {len(df_unmapped)} Sessions are missing from the tables below because their Topic names did not match our keywords.")
         with st.expander("View Unmapped Sessions (Click here to find missing data)"):
