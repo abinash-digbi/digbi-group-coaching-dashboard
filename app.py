@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Diagnostic Mode (Fixed Case Sensitivity)
+Version: Business KPIs (Avg Attendees & Avg Time Spent)
 """
 
 import streamlit as st
@@ -58,9 +58,9 @@ def load_database():
                 df['Temp_Date'] = pd.to_datetime(df['Start Time'], errors='coerce')
                 df = df.sort_values(by='Temp_Date', ascending=True).drop(columns=['Temp_Date'])
                 return df.reset_index(drop=True)
-        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
+        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Duration", "Source"])
     except:
-        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Source"])
+        return pd.DataFrame(columns=["Session ID", "Topic", "Mapped Series", "Start Time", "Participant Email", "Duration", "Source"])
 
 def process_and_upload(uploaded_files, existing_df):
     new_rows = []
@@ -88,7 +88,6 @@ def process_and_upload(uploaded_files, existing_df):
             email = str(email_val).strip().lower()
             
             name_val = 'unknown_user'
-            # FIXED: Made column checking highly robust for case sensitivity and Zoom variations
             if 'Name (Original Name)' in df.columns and pd.notna(row['Name (Original Name)']): name_val = row['Name (Original Name)']
             elif 'Name (original name)' in df.columns and pd.notna(row['Name (original name)']): name_val = row['Name (original name)']
             elif 'Name' in df.columns and pd.notna(row['Name']): name_val = row['Name']
@@ -96,6 +95,18 @@ def process_and_upload(uploaded_files, existing_df):
             
             if email == 'no email' or email == '':
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}_{s_id[-4:]}"
+
+            # Extract Duration (Zoom sometimes duplicates this column name, handling both edge cases)
+            duration = 0
+            if 'Duration (minutes).1' in df.columns:
+                duration = pd.to_numeric(row['Duration (minutes).1'], errors='coerce')
+            elif 'Duration (Minutes).1' in df.columns:
+                duration = pd.to_numeric(row['Duration (Minutes).1'], errors='coerce')
+            elif 'Duration (minutes)' in df.columns:
+                duration = pd.to_numeric(row['Duration (minutes)'], errors='coerce')
+            
+            if pd.isna(duration):
+                duration = 0
             
             is_dup = False
             if not existing_df.empty:
@@ -105,7 +116,8 @@ def process_and_upload(uploaded_files, existing_df):
                 if not match.empty: is_dup = True
             
             if not is_dup:
-                new_rows.append([s_id, row['Topic'], mapped, s_time, email, file.name])
+                # Appending the new Duration metric to the database upload
+                new_rows.append([s_id, row['Topic'], mapped, s_time, email, duration, file.name])
                 existing_df.loc[len(existing_df)] = new_rows[-1] 
                 
     if new_rows:
@@ -157,20 +169,30 @@ def render_dashboard():
     df_all_sessions = filtered_db.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
     
     df_core_sessions = df_all_sessions[df_all_sessions['Mapped Series'].isin(COACHING_SERIES)]
-    # FIXED: Re-enabled phone numbers to show in Attendee count
     df_core_attendees = filtered_db[(filtered_db['Mapped Series'].isin(COACHING_SERIES)) & 
                                     (~filtered_db['Participant Email'].str.startswith('no_email_unknown_user'))]
 
-    df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
-    df_excluded = df_all_sessions[df_all_sessions['Mapped Series'] == 'Excluded Client Session']
+    # Calculate New KPIs
+    total_sessions = len(df_core_sessions)
+    total_attendees = len(df_core_attendees)
+    
+    avg_attendees_per_session = total_attendees / total_sessions if total_sessions > 0 else 0
+    
+    if 'Duration' in df_core_attendees.columns:
+        avg_time_spent = pd.to_numeric(df_core_attendees['Duration'], errors='coerce').mean()
+        avg_time_spent = avg_time_spent if pd.notna(avg_time_spent) else 0
+    else:
+        avg_time_spent = 0
 
-    # Master KPIs
+    # New Master KPIs (Replaced Excluded and Unmapped with Business KPIs)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Group Coaching Sessions", len(df_core_sessions))
-    c2.metric("Total Attendees", len(df_core_attendees))
-    c3.metric("Excluded (Client) Sessions", len(df_excluded))
-    c4.metric("Unmapped/Unknown Sessions", len(df_unmapped))
+    c1.metric("Group Coaching Sessions", total_sessions)
+    c2.metric("Total Attendees", total_attendees)
+    c3.metric("Avg Attendees / Session", f"{avg_attendees_per_session:.1f}")
+    c4.metric("Avg Time Spent", f"{avg_time_spent:.0f} mins")
 
+    # Keep the Data Leak Warning just in case!
+    df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
     if not df_unmapped.empty:
         st.error(f"⚠️ DATA LEAK DETECTED: {len(df_unmapped)} Sessions are missing from the tables below because their Topic names did not match our keywords.")
         with st.expander("View Unmapped Sessions (Click here to find missing data)"):
@@ -184,15 +206,30 @@ def render_dashboard():
     counts = df_core_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
     
     if not df_core_attendees.empty:
-        stats = df_core_attendees.groupby("Mapped Series").agg(Attendees=("Participant Email", "count"), Unique=("Participant Email", "nunique")).reset_index()
+        stats = df_core_attendees.groupby("Mapped Series").agg(
+            Attendees=("Participant Email", "count"), 
+            Unique=("Participant Email", "nunique")
+        ).reset_index()
+        
+        # Add average duration per specific series
+        if 'Duration' in df_core_attendees.columns:
+            df_core_attendees['Duration'] = pd.to_numeric(df_core_attendees['Duration'], errors='coerce')
+            dur_stats = df_core_attendees.groupby("Mapped Series")['Duration'].mean().reset_index(name="Avg Duration (Mins)")
+            stats = pd.merge(stats, dur_stats, on="Mapped Series", how="left")
+            stats["Avg Duration (Mins)"] = stats["Avg Duration (Mins)"].fillna(0).round(0)
     else:
-        stats = pd.DataFrame(columns=["Mapped Series", "Attendees", "Unique"])
+        stats = pd.DataFrame(columns=["Mapped Series", "Attendees", "Unique", "Avg Duration (Mins)"])
 
     merged = pd.merge(base, counts, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     merged = pd.merge(merged, stats, left_on="series", right_on="Mapped Series", how="left").fillna(0)
     
     merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
-    st.dataframe(merged[["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
+    
+    display_cols = ["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]
+    if "Avg Duration (Mins)" in merged.columns:
+        display_cols.append("Avg Duration (Mins)")
+        
+    st.dataframe(merged[display_cols].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
@@ -224,7 +261,6 @@ def render_dashboard():
         mc3.metric("Unique Members", unique_att)
 
         st.subheader("Attendance Trend Over Time")
-        # FIX: Group by specific Start Time so same-day sessions get their own separate bars
         chart_data = filtered_series_df[['Start Time', 'Participants']].copy()
         chart_data.set_index('Start Time', inplace=True)
         st.bar_chart(chart_data, color="#FF4B4B")
@@ -236,6 +272,6 @@ def render_dashboard():
     # ── DEBUG RAW DB ──
     st.markdown("---")
     with st.expander("View Complete Raw Database (See everything loaded into Google Sheets)"):
-        st.dataframe(db_df.drop(columns=['Clean_Date']))
+        st.dataframe(db_df.drop(columns=['Clean_Date'], errors='ignore'))
 
 render_dashboard()
