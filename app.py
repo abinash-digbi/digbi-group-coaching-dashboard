@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Business KPIs (Avg Attendees & Avg Time Spent)
+Version: Human-Readable Formats & Business KPIs
 """
 
 import streamlit as st
@@ -96,7 +96,7 @@ def process_and_upload(uploaded_files, existing_df):
             if email == 'no email' or email == '':
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}_{s_id[-4:]}"
 
-            # Extract Duration (Zoom sometimes duplicates this column name, handling both edge cases)
+            # Extract Duration
             duration = 0
             if 'Duration (minutes).1' in df.columns:
                 duration = pd.to_numeric(row['Duration (minutes).1'], errors='coerce')
@@ -116,7 +116,6 @@ def process_and_upload(uploaded_files, existing_df):
                 if not match.empty: is_dup = True
             
             if not is_dup:
-                # Appending the new Duration metric to the database upload
                 new_rows.append([s_id, row['Topic'], mapped, s_time, email, duration, file.name])
                 existing_df.loc[len(existing_df)] = new_rows[-1] 
                 
@@ -184,18 +183,16 @@ def render_dashboard():
     else:
         avg_time_spent = 0
 
-    # New Master KPIs (Replaced Excluded and Unmapped with Business KPIs)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Group Coaching Sessions", total_sessions)
     c2.metric("Total Attendees", total_attendees)
     c3.metric("Avg Attendees / Session", f"{avg_attendees_per_session:.1f}")
     c4.metric("Avg Time Spent", f"{avg_time_spent:.0f} mins")
 
-    # Keep the Data Leak Warning just in case!
     df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
     if not df_unmapped.empty:
         st.error(f"⚠️ DATA LEAK DETECTED: {len(df_unmapped)} Sessions are missing from the tables below because their Topic names did not match our keywords.")
-        with st.expander("View Unmapped Sessions (Click here to find missing data)"):
+        with st.expander("View Unmapped Sessions"):
             st.dataframe(df_unmapped[['Start Time', 'Topic', 'Session ID']])
 
     st.markdown("---")
@@ -211,7 +208,6 @@ def render_dashboard():
             Unique=("Participant Email", "nunique")
         ).reset_index()
         
-        # Add average duration per specific series
         if 'Duration' in df_core_attendees.columns:
             df_core_attendees['Duration'] = pd.to_numeric(df_core_attendees['Duration'], errors='coerce')
             dur_stats = df_core_attendees.groupby("Mapped Series")['Duration'].mean().reset_index(name="Avg Duration (Mins)")
@@ -243,13 +239,16 @@ def render_dashboard():
 
     df_breakdown = pd.merge(df_core_sessions, session_counts, on=['Session ID', 'Start Time'], how='left')
     df_breakdown['Participants'] = df_breakdown['Participants'].fillna(0).astype(int)
-    df_breakdown['Date'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce').dt.date
+    
+    # Extract Datetime object for chronological sorting
+    df_breakdown['DateTime_Obj'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
 
     series_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
     selected_series = st.selectbox("Select Coaching Series:", ["-- Choose a Series to view details --"] + series_options)
 
     if selected_series != "-- Choose a Series to view details --":
-        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("Date", ascending=True)
+        # Sort using the true DateTime object to maintain chronological order
+        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("DateTime_Obj", ascending=True)
         
         total_sesh = len(filtered_series_df)
         total_att = filtered_series_df['Participants'].sum()
@@ -266,8 +265,19 @@ def render_dashboard():
         st.bar_chart(chart_data, color="#FF4B4B")
 
         st.subheader("Detailed Session Log")
-        display_cols = ['Date', 'Start Time', 'Topic', 'Participants']
-        st.dataframe(filtered_series_df[display_cols].sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
+        
+        # Format a Human-Readable copy just for the table display!
+        display_df = filtered_series_df[['DateTime_Obj', 'Topic', 'Participants']].copy()
+        
+        # Format Date (e.g. Jan 09, 2026)
+        display_df['Date'] = display_df['DateTime_Obj'].dt.strftime('%b %d, %Y')
+        
+        # Format Time (e.g. 10:54 AM, stripping out the seconds and redundant date)
+        display_df['Time'] = display_df['DateTime_Obj'].dt.strftime('%I:%M %p')
+        
+        # Rearrange columns beautifully
+        clean_cols = ['Date', 'Time', 'Topic', 'Participants']
+        st.dataframe(display_df[clean_cols], use_container_width=True, hide_index=True)
 
     # ── DEBUG RAW DB ──
     st.markdown("---")
