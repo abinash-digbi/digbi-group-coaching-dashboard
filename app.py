@@ -166,8 +166,8 @@ def render_dashboard():
 
     # Master KPIs
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Core Target Sessions", len(df_core_sessions))
-    c2.metric("Core Attendees", len(df_core_attendees))
+    c1.metric("Group Coaching Sessions", len(df_core_sessions))
+    c2.metric("Total Attendees", len(df_core_attendees))
     c3.metric("Excluded (Client) Sessions", len(df_excluded))
     c4.metric("Unmapped/Unknown Sessions", len(df_unmapped))
 
@@ -224,8 +224,9 @@ def render_dashboard():
         mc3.metric("Unique Members", unique_att)
 
         st.subheader("Attendance Trend Over Time")
-        chart_data = filtered_series_df.groupby('Date')['Participants'].sum().reset_index()
-        chart_data.set_index('Date', inplace=True)
+        # FIX: Group by specific Start Time so same-day sessions get their own separate bars
+        chart_data = filtered_series_df[['Start Time', 'Participants']].copy()
+        chart_data.set_index('Start Time', inplace=True)
         st.bar_chart(chart_data, color="#FF4B4B")
 
         st.subheader("Detailed Session Log")
