@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Human-Readable Graphs & Clean KPIs
+Version: Session Terminology & Unique Attendees
 """
 
 import streamlit as st
@@ -96,7 +96,6 @@ def process_and_upload(uploaded_files, existing_df):
             if email == 'no email' or email == '':
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}_{s_id[-4:]}"
 
-            # Safely capture duration for backend (hidden in frontend)
             duration = 0
             if 'Duration (minutes).1' in df.columns:
                 duration = pd.to_numeric(row['Duration (minutes).1'], errors='coerce')
@@ -177,7 +176,7 @@ def render_dashboard():
     c1, c2, c3 = st.columns(3)
     c1.metric("Group Coaching Sessions", total_sessions)
     c2.metric("Total Attendees", total_attendees)
-    c3.metric("Avg Attendees / Session", f"{avg_attendees_per_session:.1f}")
+    c3.metric("Unique Attendees / Session", f"{avg_attendees_per_session:.1f}")
 
     df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
     if not df_unmapped.empty:
@@ -189,7 +188,7 @@ def render_dashboard():
 
     # ── 1. AGGREGATE PERFORMANCE TABLE ──
     st.subheader("Coaching Session Performance")
-    base = pd.DataFrame({"series": COACHING_SERIES})
+    base = pd.DataFrame({"Session": COACHING_SERIES})
     counts = df_core_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
     
     if not df_core_attendees.empty:
@@ -200,18 +199,22 @@ def render_dashboard():
     else:
         stats = pd.DataFrame(columns=["Mapped Series", "Attendees", "Unique"])
 
-    merged = pd.merge(base, counts, left_on="series", right_on="Mapped Series", how="left").fillna(0)
-    merged = pd.merge(merged, stats, left_on="series", right_on="Mapped Series", how="left").fillna(0)
+    merged = pd.merge(base, counts, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
+    merged = pd.merge(merged, stats, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
     
-    merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
+    # Rename "Unique" to "Unique Members" to avoid confusion
+    merged.rename(columns={"Unique": "Unique Members"}, inplace=True)
     
-    display_cols = ["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]
+    # Rename the math calculation to "Unique Attendees"
+    merged["Unique Attendees"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
+    
+    display_cols = ["Session", "Sessions", "Attendees", "Unique Members", "Unique Attendees"]
     st.dataframe(merged[display_cols].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
     # ── 2. DEEP DIVE: GRAPHS & FILTERS ──
-    st.header("📈 Series Deep Dive")
+    st.header("📈 Session Deep Dive")
     
     if not df_core_attendees.empty:
         session_counts = df_core_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
@@ -221,40 +224,35 @@ def render_dashboard():
     df_breakdown = pd.merge(df_core_sessions, session_counts, on=['Session ID', 'Start Time'], how='left')
     df_breakdown['Participants'] = df_breakdown['Participants'].fillna(0).astype(int)
     
-    # Extract Datetime object for chronological sorting and formatting
     df_breakdown['DateTime_Obj'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
 
-    series_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
-    selected_series = st.selectbox("Select Coaching Series:", ["-- Choose a Series to view details --"] + series_options)
+    session_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
+    selected_session = st.selectbox("Select Coaching Session:", ["-- Choose a Session to view details --"] + session_options)
 
-    if selected_series != "-- Choose a Series to view details --":
-        # Sort using the true DateTime object to maintain chronological order
-        filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("DateTime_Obj", ascending=True).copy()
+    if selected_session != "-- Choose a Session to view details --":
+        filtered_session_df = df_breakdown[df_breakdown['Mapped Series'] == selected_session].sort_values("DateTime_Obj", ascending=True).copy()
         
-        total_sesh = len(filtered_series_df)
-        total_att = filtered_series_df['Participants'].sum()
-        unique_att = df_core_attendees[df_core_attendees['Mapped Series'] == selected_series]['Participant Email'].nunique()
+        total_sesh = len(filtered_session_df)
+        total_att = filtered_session_df['Participants'].sum()
+        unique_att = df_core_attendees[df_core_attendees['Mapped Series'] == selected_session]['Participant Email'].nunique()
         
         mc1, mc2, mc3 = st.columns(3)
         mc1.metric(f"Total Sessions", total_sesh)
         mc2.metric("Total Attendees", total_att)
         mc3.metric("Unique Members", unique_att)
 
-        # Create Human-Readable Labels for the Graph and Table
-        filtered_series_df['Date'] = filtered_series_df['DateTime_Obj'].dt.strftime('%b %d, %Y')
-        filtered_series_df['Time'] = filtered_series_df['DateTime_Obj'].dt.strftime('%I:%M %p')
-        filtered_series_df['Session_Label'] = filtered_series_df['Date'] + " - " + filtered_series_df['Time']
+        filtered_session_df['Date'] = filtered_session_df['DateTime_Obj'].dt.strftime('%b %d, %Y')
+        filtered_session_df['Time'] = filtered_session_df['DateTime_Obj'].dt.strftime('%I:%M %p')
+        filtered_session_df['Session_Label'] = filtered_session_df['Date'] + " - " + filtered_session_df['Time']
 
         st.subheader("Attendance Trend Over Time")
-        # Use the beautiful "Session_Label" for the graph's X-Axis!
-        chart_data = filtered_series_df[['Session_Label', 'Participants']].copy()
+        chart_data = filtered_session_df[['Session_Label', 'Participants']].copy()
         chart_data.set_index('Session_Label', inplace=True)
         st.bar_chart(chart_data, color="#FF4B4B")
 
         st.subheader("Detailed Session Log")
-        # Rearrange columns beautifully for the table
         clean_cols = ['Date', 'Time', 'Topic', 'Participants']
-        st.dataframe(filtered_series_df[clean_cols], use_container_width=True, hide_index=True)
+        st.dataframe(filtered_session_df[clean_cols], use_container_width=True, hide_index=True)
 
     # ── DEBUG RAW DB ──
     st.markdown("---")
