@@ -225,9 +225,9 @@ def render_dashboard():
     df_breakdown['DateTime_Obj'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
 
     series_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
-    selected_series = st.selectbox("Select Coaching Series:", ["-- Choose a Series to view details --"] + series_options)
+    selected_series = st.selectbox("Select Coaching Session:", ["-- Choose a Series to view details --"] + series_options)
 
-    if selected_series != "-- Choose a Series to view details --":
+    if selected_series != "-- Choose a Session to view details --":
         # Sort using the true DateTime object to maintain chronological order
         filtered_series_df = df_breakdown[df_breakdown['Mapped Series'] == selected_series].sort_values("DateTime_Obj", ascending=True).copy()
         
