@@ -188,7 +188,7 @@ def render_dashboard():
     st.markdown("---")
 
     # ── 1. AGGREGATE PERFORMANCE TABLE ──
-    st.subheader("Core Series Performance")
+    st.subheader("Coaching Session Performance")
     base = pd.DataFrame({"series": COACHING_SERIES})
     counts = df_core_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
     
