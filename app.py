@@ -147,7 +147,7 @@ def render_dashboard():
     start_date = st.sidebar.date_input("Start Date", value=date(2026, 1, 1))
     end_date = st.sidebar.date_input("End Date", value=date.today())
 
-    st.title("Coaching Session Dashboard")
+    st.title("Coaching Dashboard")
     
     if db_df.empty:
         st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
@@ -188,7 +188,7 @@ def render_dashboard():
     st.markdown("---")
 
     # ── 1. AGGREGATE PERFORMANCE TABLE ──
-    st.subheader("Session Performance")
+    st.subheader("Core Series Performance")
     base = pd.DataFrame({"series": COACHING_SERIES})
     counts = df_core_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
     
@@ -205,13 +205,13 @@ def render_dashboard():
     
     merged["Avg Attendance"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
     
-    display_cols = ["Session", "Sessions", "Attendees", "Avg Attendance"]
+    display_cols = ["series", "Sessions", "Attendees", "Unique", "Avg Attendance"]
     st.dataframe(merged[display_cols].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
     # ── 2. DEEP DIVE: GRAPHS & FILTERS ──
-    st.header("📈 Session Report")
+    st.header("📈 Series Deep Dive")
     
     if not df_core_attendees.empty:
         session_counts = df_core_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
@@ -225,7 +225,7 @@ def render_dashboard():
     df_breakdown['DateTime_Obj'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
 
     series_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
-    selected_series = st.selectbox("Select Coaching Session:", ["-- Choose a Series to view details --"] + series_options)
+    selected_series = st.selectbox("Select Coaching Series:", ["-- Choose a Series to view details --"] + series_options)
 
     if selected_series != "-- Choose a Series to view details --":
         # Sort using the true DateTime object to maintain chronological order
