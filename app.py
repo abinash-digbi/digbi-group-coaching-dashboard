@@ -211,7 +211,7 @@ def render_dashboard():
     st.markdown("---")
 
     # ── 2. DEEP DIVE: GRAPHS & FILTERS ──
-    st.header("📈 Series Deep Dive")
+    st.header("📈 Performance by Sessions")
     
     if not df_core_attendees.empty:
         session_counts = df_core_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
