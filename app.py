@@ -1,6 +1,6 @@
 """
 Digbi Health — Group Coaching Dashboard
-Version: Session Terminology & Unique Attendees
+Version: Cleaned Metrics (Removed Unique Attendees Calc)
 """
 
 import streamlit as st
@@ -171,12 +171,12 @@ def render_dashboard():
     # Calculate Core KPIs
     total_sessions = len(df_core_sessions)
     total_attendees = len(df_core_attendees)
-    avg_attendees_per_session = total_attendees / total_sessions if total_sessions > 0 else 0
+    total_unique_members = df_core_attendees['Participant Email'].nunique() if not df_core_attendees.empty else 0
     
     c1, c2, c3 = st.columns(3)
     c1.metric("Group Coaching Sessions", total_sessions)
     c2.metric("Total Attendees", total_attendees)
-    c3.metric("Unique Attendees / Session", f"{avg_attendees_per_session:.1f}")
+    c3.metric("Unique Members", total_unique_members)
 
     df_unmapped = df_all_sessions[df_all_sessions['Mapped Series'] == 'Unmapped']
     if not df_unmapped.empty:
@@ -202,13 +202,10 @@ def render_dashboard():
     merged = pd.merge(base, counts, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
     merged = pd.merge(merged, stats, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
     
-    # Rename "Unique" to "Unique Members" to avoid confusion
+    # Rename "Unique" to "Unique Members"
     merged.rename(columns={"Unique": "Unique Members"}, inplace=True)
     
-    # Rename the math calculation to "Unique Attendees"
-    merged["Unique Attendees"] = (merged["Attendees"] / merged["Sessions"].replace(0, float('nan'))).fillna(0).round(1)
-    
-    display_cols = ["Session", "Sessions", "Attendees", "Unique Members", "Unique Attendees"]
+    display_cols = ["Session", "Sessions", "Attendees", "Unique Members"]
     st.dataframe(merged[display_cols].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
     st.markdown("---")
