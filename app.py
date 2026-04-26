@@ -32,8 +32,15 @@ COACHING_SERIES = [
 def map_to_series(topic_str):
     if not isinstance(topic_str, str): return "Unmapped"
     t = topic_str.strip().lower()
-    
-    excluded = ["schreiber", "dexcom", "kehe", "ndphit", "silgan", "okaloosa", "azlgebt", "frp", "evry health", "raght", "mohave", "sscgp", "southern", "weston", "prism", "zachry", "city of fw", "city of fort worth", "aaa", "elbit", "vericast", "dexter", "west fargo", "naebt", "cct", "southern star"]
+
+    # Load exclusion keywords from secrets only (keeps company names out of public source code)
+    raw_excl = st.secrets.get("EXCLUDED_KEYWORDS", [])
+    if isinstance(raw_excl, str):
+        excluded = [k.strip().lower() for k in raw_excl.split(",") if k.strip()]
+    elif isinstance(raw_excl, list):
+        excluded = [str(k).strip().lower() for k in raw_excl if k]
+    else:
+        excluded = []
     if any(k in t for k in excluded): return "Excluded Client Session"
 
     if "group coaching for members" in t: return COACHING_SERIES[0]
@@ -43,7 +50,7 @@ def map_to_series(topic_str):
     if "glp" in t or "wellness benefit" in t or "living well" in t: return COACHING_SERIES[4]
     if "ibs" in t or "irritable" in t: return COACHING_SERIES[5]
     if "fine-tuning" in t or "fine tuning" in t: return COACHING_SERIES[6]
-    
+
     return "Unmapped"
 
 # 3. DATABASE HELPER FUNCTIONS
@@ -53,7 +60,7 @@ def load_database():
         r = requests.get(APPS_SCRIPT_URL)
         if r.status_code == 200:
             data = r.json()
-            if len(data) > 1: 
+            if len(data) > 1:
                 df = pd.DataFrame(data[1:], columns=data[0])
                 df['Temp_Date'] = pd.to_datetime(df['Start Time'], errors='coerce')
                 df = df.sort_values(by='Temp_Date', ascending=True).drop(columns=['Temp_Date'])
@@ -64,35 +71,35 @@ def load_database():
 
 def process_and_upload(uploaded_files, existing_df):
     new_rows = []
-    
+
     for file in uploaded_files:
         try: df = pd.read_csv(file)
         except Exception: continue
-            
+
         if 'Topic' not in df.columns: continue
-            
+
         start_time_col = 'Start time' if 'Start time' in df.columns else ('Start Time' if 'Start Time' in df.columns else None)
         id_col = 'ID' if 'ID' in df.columns else ('Meeting ID' if 'Meeting ID' in df.columns else None)
-        
+
         if not start_time_col or not id_col: continue
-            
+
         for _, row in df.iterrows():
             mapped = map_to_series(row['Topic'])
-            
+
             s_id = str(row[id_col]).replace(" ", "")
             s_time = str(row[start_time_col])
-            
+
             email_val = 'no email'
             if 'Email' in df.columns and pd.notna(row['Email']): email_val = row['Email']
             elif 'User Email' in df.columns and pd.notna(row['User Email']): email_val = row['User Email']
             email = str(email_val).strip().lower()
-            
+
             name_val = 'unknown_user'
             if 'Name (Original Name)' in df.columns and pd.notna(row['Name (Original Name)']): name_val = row['Name (Original Name)']
             elif 'Name (original name)' in df.columns and pd.notna(row['Name (original name)']): name_val = row['Name (original name)']
             elif 'Name' in df.columns and pd.notna(row['Name']): name_val = row['Name']
             elif 'First Name' in df.columns: name_val = str(row.get('First Name', '')) + "_" + str(row.get('Last Name', ''))
-            
+
             if email == 'no email' or email == '':
                 email = f"no_email_{str(name_val).strip().lower().replace(' ', '_')}_{s_id[-4:]}"
 
@@ -104,18 +111,18 @@ def process_and_upload(uploaded_files, existing_df):
             elif 'Duration (minutes)' in df.columns:
                 duration = pd.to_numeric(row['Duration (minutes)'], errors='coerce')
             if pd.isna(duration): duration = 0
-            
+
             is_dup = False
             if not existing_df.empty:
-                match = existing_df[(existing_df['Session ID'].astype(str) == s_id) & 
-                                    (existing_df['Start Time'] == s_time) & 
+                match = existing_df[(existing_df['Session ID'].astype(str) == s_id) &
+                                    (existing_df['Start Time'] == s_time) &
                                     (existing_df['Participant Email'] == email)]
                 if not match.empty: is_dup = True
-            
+
             if not is_dup:
                 new_rows.append([s_id, row['Topic'], mapped, s_time, email, duration, file.name])
-                existing_df.loc[len(existing_df)] = new_rows[-1] 
-                
+                existing_df.loc[len(existing_df)] = new_rows[-1]
+
     if new_rows:
         try:
             r = requests.post(APPS_SCRIPT_URL, json=new_rows)
@@ -130,15 +137,15 @@ def render_dashboard():
     st.sidebar.title("📤 Monthly Data Importer")
     uploaded_files = st.sidebar.file_uploader("Upload CSVs", type=['csv'], accept_multiple_files=True)
     db_df = load_database()
-    
+
     if st.sidebar.button("Sync to Google Sheets"):
         if uploaded_files:
             with st.spinner("Validating and Saving..."):
                 added = process_and_upload(uploaded_files, db_df)
-            if added > 0:
-                st.sidebar.success(f"✅ Successfully added {added} new records!")
-            st.cache_data.clear() 
-            st.rerun()
+                if added > 0:
+                    st.sidebar.success(f"✅ Successfully added {added} new records!")
+                    st.cache_data.clear()
+                    st.rerun()
 
     # -- SIDEBAR DATE FILTERS --
     st.sidebar.markdown("---")
@@ -147,7 +154,7 @@ def render_dashboard():
     end_date = st.sidebar.date_input("End Date", value=date.today())
 
     st.title("Coaching Dashboard")
-    
+
     if db_df.empty:
         st.info("The database is currently empty. Upload your historical CSVs on the left to build the dashboard.")
         return
@@ -163,16 +170,16 @@ def render_dashboard():
 
     # ── DATA BUCKETS ──
     df_all_sessions = filtered_db.drop_duplicates(subset=['Session ID', 'Start Time']).copy()
-    
+
     df_core_sessions = df_all_sessions[df_all_sessions['Mapped Series'].isin(COACHING_SERIES)]
-    df_core_attendees = filtered_db[(filtered_db['Mapped Series'].isin(COACHING_SERIES)) & 
+    df_core_attendees = filtered_db[(filtered_db['Mapped Series'].isin(COACHING_SERIES)) &
                                     (~filtered_db['Participant Email'].str.startswith('no_email_unknown_user'))]
 
     # Calculate Core KPIs
     total_sessions = len(df_core_sessions)
     total_attendees = len(df_core_attendees)
     total_unique_members = df_core_attendees['Participant Email'].nunique() if not df_core_attendees.empty else 0
-    
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Group Coaching Sessions", total_sessions)
     c2.metric("Total Attendees", total_attendees)
@@ -190,10 +197,10 @@ def render_dashboard():
     st.subheader("Coaching Session Performance")
     base = pd.DataFrame({"Session": COACHING_SERIES})
     counts = df_core_sessions.groupby("Mapped Series").size().reset_index(name="Sessions")
-    
+
     if not df_core_attendees.empty:
         stats = df_core_attendees.groupby("Mapped Series").agg(
-            Attendees=("Participant Email", "count"), 
+            Attendees=("Participant Email", "count"),
             Unique=("Participant Email", "nunique")
         ).reset_index()
     else:
@@ -201,10 +208,10 @@ def render_dashboard():
 
     merged = pd.merge(base, counts, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
     merged = pd.merge(merged, stats, left_on="Session", right_on="Mapped Series", how="left").fillna(0)
-    
+
     # Rename "Unique" to "Unique Members"
     merged.rename(columns={"Unique": "Unique Members"}, inplace=True)
-    
+
     display_cols = ["Session", "Sessions", "Attendees", "Unique Members"]
     st.dataframe(merged[display_cols].sort_values("Sessions", ascending=False), use_container_width=True, hide_index=True)
 
@@ -212,7 +219,7 @@ def render_dashboard():
 
     # ── 2. DEEP DIVE: GRAPHS & FILTERS ──
     st.header("📈 Session Deep Dive")
-    
+
     if not df_core_attendees.empty:
         session_counts = df_core_attendees.groupby(['Session ID', 'Start Time']).size().reset_index(name='Participants')
     else:
@@ -220,7 +227,7 @@ def render_dashboard():
 
     df_breakdown = pd.merge(df_core_sessions, session_counts, on=['Session ID', 'Start Time'], how='left')
     df_breakdown['Participants'] = df_breakdown['Participants'].fillna(0).astype(int)
-    
+
     df_breakdown['DateTime_Obj'] = pd.to_datetime(df_breakdown['Start Time'], errors='coerce')
 
     session_options = [s for s in COACHING_SERIES if s in df_breakdown['Mapped Series'].values]
@@ -228,11 +235,11 @@ def render_dashboard():
 
     if selected_session != "-- Choose a Session to view details --":
         filtered_session_df = df_breakdown[df_breakdown['Mapped Series'] == selected_session].sort_values("DateTime_Obj", ascending=True).copy()
-        
+
         total_sesh = len(filtered_session_df)
         total_att = filtered_session_df['Participants'].sum()
         unique_att = df_core_attendees[df_core_attendees['Mapped Series'] == selected_session]['Participant Email'].nunique()
-        
+
         mc1, mc2, mc3 = st.columns(3)
         mc1.metric(f"Total Sessions", total_sesh)
         mc2.metric("Total Attendees", total_att)
