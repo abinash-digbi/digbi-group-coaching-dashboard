@@ -72,6 +72,14 @@ def load_database():
 def process_and_upload(uploaded_files, existing_df):
     new_rows = []
 
+    # Build a set of already-seen keys for fast O(1) duplicate checking
+    # (avoids the mismatched-column error from appending rows to the live DataFrame)
+    seen_keys = set()
+    if not existing_df.empty:
+        for _, erow in existing_df.iterrows():
+            key = f"{str(erow.get('Session ID', '')).strip()}|{str(erow.get('Start Time', '')).strip()}|{str(erow.get('Participant Email', '')).strip().lower()}"
+            seen_keys.add(key)
+
     for file in uploaded_files:
         try: df = pd.read_csv(file)
         except Exception: continue
@@ -112,16 +120,12 @@ def process_and_upload(uploaded_files, existing_df):
                 duration = pd.to_numeric(row['Duration (minutes)'], errors='coerce')
             if pd.isna(duration): duration = 0
 
-            is_dup = False
-            if not existing_df.empty:
-                match = existing_df[(existing_df['Session ID'].astype(str) == s_id) &
-                                    (existing_df['Start Time'] == s_time) &
-                                    (existing_df['Participant Email'] == email)]
-                if not match.empty: is_dup = True
+            row_key = f"{s_id}|{s_time}|{email}"
+            is_dup = row_key in seen_keys
 
             if not is_dup:
                 new_rows.append([s_id, row['Topic'], mapped, s_time, email, duration, file.name])
-                existing_df.loc[len(existing_df)] = new_rows[-1]
+                seen_keys.add(row_key)
 
     if new_rows:
         try:
